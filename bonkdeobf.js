@@ -29,7 +29,7 @@ function noStrings(code){
 			continue
 		}
 		code += a.value
-		if (a.type === "Keyword") code += " "
+		if (a.type === "Keyword" || a.value === "static") code += " "
 	}
 	return js_beautify(code, {e4x: true, indent_with_tabs: true})
 }
@@ -49,7 +49,7 @@ function replaceVars(code, oldNames, newNames, progressCallback){
 			}
 		}
 		code += a.value
-		if (a.type === "Keyword") code += " "
+		if (a.type === "Keyword" || a.value === "static") code += " "
 		isPrevTokenDot = a.value === "."
 	}
 	return js_beautify(code, {e4x: true, indent_with_tabs: true})
@@ -234,8 +234,6 @@ log("Removing empty if statements")
 returncode = returncode.replaceAll(/if \(.+?\) \{\s*\}(?! else)/gm, "")
 log("Replacing all array indexing with dot indexing")
 returncode = returncode.replaceAll(/\["([a-zA-Z_$][a-zA-Z0-9_\$]*?)"\]/g, ".$1")
-log("Replacing \"var abc = class def\" with \"class abc\"")
-returncode = returncode.replaceAll(/^\t+var ([a-zA-Z0-9_\$]+) = class [a-zA-Z0-9_\$]+/gm, "class $1")
 log("Cleanup")
 returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 log("Removing nonsensical if-statements")
@@ -398,6 +396,18 @@ log("Removing unnecessary variable initializations")
 		counter++
 	}
 	returncode = returncode.replaceAll("var ;", "")
+}
+log("Replacing \"var abc = class def\" with \"class abc\"")
+{
+	const matches = [...returncode.matchAll(/var ([a-zA-Z0-9_\$\[\]]+) = class ([a-zA-Z0-9_\$]+)/g)]
+	returncode = returncode.replaceAll(/var ([a-zA-Z0-9_\$\[\]]+) = class [a-zA-Z0-9_\$]+/g, "class $1")
+	const o = []
+	const n = []
+	for (const a of matches){
+		o.push(a[2])
+		n.push(a[1])
+	}
+	returncode = replaceVars(returncode, o, n)
 }
 log("Removing unused variables again")
 removeUnusedVars()

@@ -30,3 +30,5 @@ a00v=Maps
 a00w=Ball
 a00x=FootballPlayer
 a00z=GameCountdown
+a02r=layerNames
+a1ea=news
