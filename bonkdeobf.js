@@ -416,16 +416,32 @@ log("Setting variable names")
 	const entries = (fs.readFileSync("variableNames.txt", {encoding: "ascii"})).split("\n")
 	const oldNames = []
 	const newNames = []
-	let counter = 1
 	for (const i in entries){
 		const [oldN, newN] = entries[i].split("=")
 		oldNames.push(oldN)
 		newNames.push(newN)
 	}
-	returncode = replaceVars(returncode, oldNames, newNames, () => {
-		counter++
-		changeStatus(counter + "/" + entries.length)
-	})
+	returncode = replaceVars(returncode, oldNames, newNames)
+}
+log("Removing dead code")
+{
+	const entries = [...returncode.matchAll(/^(\t*)function [a-zA-Z0-9_\$]+\([a-zA-Z0-9_\$, ]*\) \{\n/gm)]
+	let deadCode = []
+	for (const a of entries){
+		const length = a[1].length + 1
+		const split = ((returncode.match(new RegExp(`${escapeRegExp(a[0])}([\\S\\s]+?)\\n${a[1]}\\}`)))[1]).split("\n")
+		for (let i = 0; i < split.length; i++){
+			const line = split[i]
+			const trimmedLine = line.slice(length)
+			if (trimmedLine.startsWith("return;") && i < split.length - 1){
+				deadCode.push(split.slice(i+1).join("\n"))
+			}
+		}
+	}
+	for (const a of deadCode){
+		returncode = returncode.replace(a, "")
+	}
+	changeStatus(deadCode.length + " sections found")
 }
 log("Final cleanup")
 {
