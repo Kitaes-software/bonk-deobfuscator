@@ -7,6 +7,8 @@ const js_beautify = require('js-beautify/js').js
 const fs = require("fs")
 const minify = require("uglify-js").minify
 const esprima = require("esprima")
+const escodegen = require("escodegen")
+const estraverse = require("estraverse")
 let consoleText
 function log(text) {
 	process.stdout.write(`\n${text}`)
@@ -20,9 +22,7 @@ function noStrings(code){
 	const tokens = esprima.tokenize(code)
 	code = ""
 	for (const a of tokens){
-		if (a.type === "Keyword"){
-			if (a.value === "in" || a.value === "of" || a.value === "instanceof") code += " "
-		}
+		if (a.type === "Keyword") code += " "
 		if (a.type === "String") {
 			code += "''"
 			codeStringList.push(a.value)
@@ -33,14 +33,24 @@ function noStrings(code){
 	}
 	return js_beautify(code, {e4x: true, indent_with_tabs: true})
 }
+function replaceDecsWithExpr(decCode){
+	const ast = esprima.parseScript(decCode)
+	const expr = []
+	const decs = []
+	for (let i = 0; i < ast.body[0].declarations.length; i++) {
+		const declaration = ast.body[0].declarations[i]
+		decs.push(declaration.id.name)
+		if (declaration.init) expr.push(declaration.init)
+	}
+	ast.body = expr
+	return {code: escodegen.generate(ast), decs: decs}
+}
 function replaceVars(code, oldNames, newNames, progressCallback){
 	const tokens = esprima.tokenize(code)
 	code = ""
 	let isPrevTokenDot = false
 	for (const a of tokens){
-		if (a.type === "Keyword"){
-			if (a.value === "in" || a.value === "of" || a.value === "instanceof") code += " "
-		}
+		if (a.type === "Keyword")  code += " "
 		if (a.type === "Identifier"){
 			const oldNameIndex = oldNames.indexOf(a.value)
 			if (!isPrevTokenDot && oldNameIndex !== -1){
@@ -50,7 +60,7 @@ function replaceVars(code, oldNames, newNames, progressCallback){
 		}
 		code += a.value
 		if (a.type === "Keyword" || a.value === "static") code += " "
-		isPrevTokenDot = a.value === "."
+		isPrevTokenDot = a.type === "Punctuator" && a.value === "."
 	}
 	return js_beautify(code, {e4x: true, indent_with_tabs: true})
 }
@@ -60,26 +70,51 @@ function returnStrings(code){
 	}
 	return code
 }
-// const stringList = []
-// function generateRandomString(){
-// 	const cf = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$"
-// 	const c = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$"
-// 	for (let i = 0;; i++) {
-// 		let str = ""
-// 		str += cf[Math.round(Math.random() * (cf.length - 1))]
-// 		for (let j = 0; j < 3; j++){
-// 			str += c[Math.round(Math.random() * (c.length - 1))]
-// 		}
-// 		if (stringList.includes(str)) continue
-// 		stringList.push(str)
-// 		return str
-// 	}
-// }
+function writeToFile(filename, contents){
+	const dirname = filename.split("/")[0]
+	if (!fs.existsSync(dirname)) fs.mkdirSync(dirname)
+	fs.writeFileSync(filename, contents)
+}
 let strCount = 0
 function generateRandomString(letter){
 	let str = letter + (strCount.toString(36)).padStart(3, "0")
 	strCount++
 	return str
+}
+function setVarNames(thisOnly, code){
+	if (thisOnly) {
+		process.stdout.write("-- [Bonk Deobfuscator] --")
+		code = fs.readFileSync("deobfuscated/alpha2s.js", {encoding: "utf8"})
+	}
+	log("Setting variable names")
+	const entries = (fs.readFileSync("variableNames.ini", {encoding: "ascii"})).split("\n")
+	const oldNames = []
+	const newNames = []
+	for (const i in entries){
+		if (entries[i].startsWith("#")) continue
+		const [oldN, newN] = entries[i].split("=")
+		oldNames.push(oldN)
+		newNames.push(newN)
+	}
+	return replaceVars(code, oldNames, newNames)
+}
+function finalCleanup(code){
+	log("Final cleanup")
+	code = js_beautify(code, {e4x: true, indent_with_tabs: true})
+	const tmp = code.split("\n")
+	for (const i in tmp){
+		if (tmp[i].startsWith("\t")) tmp[i] = tmp[i].slice(1)
+		if (tmp[i].trim()) tmp[i] += "\n"
+	}
+	code = tmp.join("")
+	return code
+}
+if (process.argv[process.argv.length-1] === "namesonly"){
+	let code = finalCleanup(setVarNames(true))
+	const filename = "deobfuscated/alpha2s.js"
+	log("Saving deobfuscated code to " + filename)
+	writeToFile(filename, code)
+	process.exit(0)
 }
 const path = "alpha2s.js"
 process.stdout.write("-- [Bonk Deobfuscator] --")
@@ -265,8 +300,8 @@ for (const vars of returncode.matchAll(new RegExp(`^(\\t+)[a-zA-Z0-9_\\$\\[\\]]+
 }
 log("Removing useless for-loops")
 returncode = returncode.replaceAll(new RegExp(`^((\\t+)[a-zA-Z0-9_\\$\\[\\]]+ = -?\\d+;\\n){2}\\2for \\(.*${MAINFUNCTION}.*\\n.*\\n\\2\\}`, "gm"), "")
-log("Unpacking arguments")
 {
+	log("Unpacking arguments")
 	const matches = [...returncode.matchAll(/^.*(function )?[a-zA-Z0-9_\$]+\((.+)\) \{\n(\t+".+";\n)?\t+var ([a-zA-Z0-9_\$]+) = \[arguments\];/gm)]
 	for (const i in matches){
 		changeStatus((+i+1) + "/" + matches.length)
@@ -282,8 +317,8 @@ log("Unpacking arguments")
 		}
 	}
 }
-log("Unpacking arrays in for loops")
 {
+	log("Unpacking arrays in for loops")
 	const matches = [...returncode.matchAll(/^.+for \(([a-zA-Z0-9_\$]+\[\d+\]) (=|in)/gm)]
 	let counter = 1
 	for (const a of matches){
@@ -294,8 +329,28 @@ log("Unpacking arrays in for loops")
 		counter++
 	}
 }
-log("Removing unused functions")
 {
+	log("Removing dead code")
+	const entries = [...returncode.matchAll(/^(\t*)function [a-zA-Z0-9_\$]+\([a-zA-Z0-9_\$, ]*\) \{\n/gm)]
+	let deadCode = []
+	for (const a of entries){
+		const length = a[1].length + 1
+		const split = ((returncode.match(new RegExp(`${escapeRegExp(a[0])}([\\S\\s]+?)\\n${a[1]}\\}`)))[1]).split("\n")
+		for (let i = 0; i < split.length; i++){
+			const line = split[i]
+			const trimmedLine = line.slice(length)
+			if (trimmedLine.startsWith("return;") && i < split.length - 1){
+				deadCode.push(split.slice(i).join("\n"))
+			}
+		}
+	}
+	for (const a of deadCode){
+		returncode = returncode.replace(a, "")
+	}
+	changeStatus(deadCode.length + " sections found")
+}
+{
+	log("Removing unused functions")
 	const funcDecs = /function ([a-zA-Z0-9_\$]+)\(.*\) \{/gm
 	const funcList = []
 	for (const a of returncode.matchAll(funcDecs)){
@@ -314,46 +369,10 @@ log("Removing unused functions")
 		returncode = returncode.replace(regex, "")
 	}
 }
-log("Removing unused variables")
-function removeUnusedVars(intsOnly){
-	if (intsOnly){
-		var varDecs = /^(\t+)(var )?([a-zA-Z0-9_\$\[\]]+) = (-?\d+;)/gm
-	}
-	else{
-		var varDecs = /^(\t+)(var )?([a-zA-Z0-9_\$]+) = (.+;)/gm
-	}
-	const varInits = /^\t+var ([a-zA-Z0-9_\$, ]+);$/gm
-	let varList = []
-	for (const a of returncode.matchAll(varDecs)){
-		varList.push(a[3])
-	}
-	for (const a of returncode.matchAll(varInits)){
-		varList.push(...(a[1].split(", ")))
-	}
-	log("Total vars: " + varList.length)
-	varList = noDuplicate(varList)
-	let filteredCode = returncode.replaceAll(varDecs, "$4")
-	filteredCode = noStrings(filteredCode)
-	const unusedVars = []
-	for (const a of varList){
-		if (!filteredCode.includes(a)) unusedVars.push(a)
-	}
-	log("Unused vars: " + unusedVars.length)
-	const splitCode = returncode.split("\n")
-	returncode = ""
-	for (let a of splitCode){
-		const oa = a
-		a = a.trim()
-		if (a.startsWith("var ")) a = a.slice(4)
-		if (unusedVars.includes(a.split(" = ")[0])) continue
-		returncode += oa + "\n"
-	}
-}
-removeUnusedVars(true)
 log("Cleanup")
 returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
-log("Unpacking arrays")
 {
+	log("Unpacking arrays")
 	strCount = 0
 	const filteredCode = noStrings(returncode)
 	const matches = [...filteredCode.matchAll(/^(\t+)var ([a-zA-Z0-9_\$]+) = \[arguments\];/gm)]
@@ -376,8 +395,8 @@ log("Unpacking arrays")
 		counter++
 	}
 }
-log("Removing unnecessary variable initializations")
 {
+	log("Removing unnecessary variable initializations")
 	const inits = [...returncode.matchAll(/^(\t+)var ([a-zA-Z0-9_\$, ]+);$/gm)]
 	let counter = 1
 	for (const a of inits) {
@@ -397,8 +416,114 @@ log("Removing unnecessary variable initializations")
 	}
 	returncode = returncode.replaceAll("var ;", "")
 }
-log("Replacing \"var abc = class def\" with \"class abc\"")
+log('Replacing "var abc = anime({" with "anime({"')
+returncode = returncode.replaceAll(/^(\t+)(var )?[a-zA-Z0-9_\$]+ = anime\(\{/gm, "$1anime({")
 {
+	log("Removing unused arguments")
+	const regex = [
+		/\(([a-zA-Z0-9_\$, ]+)\) =>/g,
+		/function\(([a-zA-Z0-9_\$, ]+)\)/g,
+		/function [a-zA-Z0-9_\$]+\(([a-zA-Z0-9_\$, ]+)\)/g,
+		/[a-zA-Z0-9_\$]+\(([a-zA-Z0-9_\$, ]+)\) \{/g
+	]
+	const argList = []
+	const unusedArgs = []
+	const argStrings = []
+	for (const a of regex){
+		for (const b of returncode.matchAll(a)){
+			const args = b[1].split(", ")
+			argList.push(...args)
+			argStrings.push(args)
+		}
+	}
+	log("Total args: " + argList.length)
+	let filteredCode = noStrings(returncode)
+	for (const a of regex){
+		filteredCode = filteredCode.replace(a, "")
+	}
+	for (const a of argList){
+		if (!filteredCode.includes(a)) unusedArgs.push(a)
+	}
+	log("Unused args: " + unusedArgs.length)
+	for (const a of argStrings){
+		const origArgs = a.join(", ")
+		let loop = true
+		let n = 1
+		for (let i = a.length-1; i >= 0; i--){
+			if (unusedArgs.includes(a[i])){
+				if (loop) a.length = i
+				else {
+					a[i] = "".padStart(n, "_")
+					n++
+				}
+			}
+			else{
+				loop = false
+			}
+		}
+		returncode = returncode.replace(origArgs, a.join(", "))
+	}
+}
+{
+	log("Removing unused variables")
+	const varDecs = /^(\t+)(var .+;)/gm
+	let varList = []
+	let filteredCode = returncode.replaceAll(/^(\t+)(var )?[a-zA-Z0-9_\$]+ = (-?\d+);/gm, "$1$2")
+	filteredCode = filteredCode.replaceAll(/^(\t+)(var )?[a-zA-Z0-9_\$]+ = ([^\)\n];)/gm, "$1$2")
+	filteredCode = filteredCode.replaceAll(/^\t+(var )?[a-zA-Z0-9_\$]+ = document\.getElementById.+?;/gm, "")
+	//filteredCode = filteredCode.replaceAll(/^(\t+)[a-zA-Z0-9_\$]+ = (.+;)/gm, "$1$2")
+	for (const a of returncode.matchAll(varDecs)){
+		const {code, decs} = replaceDecsWithExpr(a[2])
+		varList.push(...decs)
+		changeStatus(varList.length + " Found")
+		filteredCode = filteredCode.replace(a[2], code)
+	}
+	varList = noDuplicate(varList)
+	log("Total vars: " + varList.length)
+	filteredCode = noStrings(filteredCode)
+	const unusedVars = []
+	for (const a of varList){
+		if (!filteredCode.includes(a)) unusedVars.push(a)
+	}
+	log("Unused vars: " + unusedVars.length)
+	const splitCode = returncode.split("\n")
+	returncode = ""
+	for (let a of splitCode){
+		const oa = a
+		if (!a.endsWith(";")) {
+			returncode += oa + "\n"
+			continue
+		}
+		let isDec = false
+		a = a.trim()
+		if (unusedVars.includes(a.slice(0, a.indexOf(" ")))) continue
+		if (a.startsWith("var ")) {
+			isDec = true
+		}
+		if (!isDec || (a.indexOf(")") !== -1)) {
+			returncode += oa + "\n"
+			continue
+		}
+		const ast = esprima.parseScript(a)
+		const decs = ast.body[0].declarations
+		const inits = []
+		for (let i = 0; i < decs.length; i++){
+			while (true){
+				if (unusedVars.includes(decs[i].id.name)){
+					if (decs[i].init) inits.push(decs[i].init)
+					decs.splice(i, 1)
+					if (decs[i]) continue
+				}
+				break;
+			}
+		}
+		if (!decs.length) continue
+		ast.body.push(...inits)
+		returncode += escodegen.generate(ast)
+	}
+}
+{
+	log("Replacing \"var abc = class def\" with \"class abc\"")
 	const matches = [...returncode.matchAll(/var ([a-zA-Z0-9_\$\[\]]+) = class ([a-zA-Z0-9_\$]+)/g)]
 	returncode = returncode.replaceAll(/var ([a-zA-Z0-9_\$\[\]]+) = class [a-zA-Z0-9_\$]+/g, "class $1")
 	const o = []
@@ -409,67 +534,42 @@ log("Replacing \"var abc = class def\" with \"class abc\"")
 	}
 	returncode = replaceVars(returncode, o, n)
 }
-log("Removing unused variables again")
-removeUnusedVars()
-log("Setting variable names")
 {
-	const entries = (fs.readFileSync("variableNames.txt", {encoding: "ascii"})).split("\n")
-	const oldNames = []
+	log('Replacing "abc" with "element" in "var abc = document.getElementById("element")"') // 80 characters damn, i barely managed to make it fit
+	const regex = /^(\t+)var ([a-zA-Z0-9_\$]+) = document\.getElementById\((['"])(.+?)\3\)/gm 
+	const varNames = []
 	const newNames = []
-	for (const i in entries){
-		const [oldN, newN] = entries[i].split("=")
-		oldNames.push(oldN)
-		newNames.push(newN)
+	for (const a of returncode.matchAll(regex)){
+		varNames.push(a[2])
+		newNames.push(a[4].replaceAll("-", "minus")) // for some reason there is an element with "-" in its id
 	}
-	returncode = replaceVars(returncode, oldNames, newNames)
+	returncode = replaceVars(returncode, varNames, newNames)
 }
-log("Removing dead code")
+returncode = setVarNames(false, returncode)
+returncode = finalCleanup(returncode)
 {
-	const entries = [...returncode.matchAll(/^(\t*)function [a-zA-Z0-9_\$]+\([a-zA-Z0-9_\$, ]*\) \{\n/gm)]
-	let deadCode = []
-	for (const a of entries){
-		const length = a[1].length + 1
-		const split = ((returncode.match(new RegExp(`${escapeRegExp(a[0])}([\\S\\s]+?)\\n${a[1]}\\}`)))[1]).split("\n")
-		for (let i = 0; i < split.length; i++){
-			const line = split[i]
-			const trimmedLine = line.slice(length)
-			if (trimmedLine.startsWith("return;") && i < split.length - 1){
-				deadCode.push(split.slice(i+1).join("\n"))
-			}
-		}
+	log("Validating the code")
+	try{
+		new Function(returncode)
 	}
-	for (const a of deadCode){
-		returncode = returncode.replace(a, "")
+	catch(e){
+		const filename = "invalid/alpha2s.js"
+		console.log()
+		console.log(e)
+		log("Code is invalid. dumping the code to " + filename)
+		writeToFile(filename, returncode)
+		process.exit(1)
 	}
-	changeStatus(deadCode.length + " sections found")
 }
-log("Final cleanup")
 {
-	returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
-	const tmp = returncode.split("\n")
-	for (const i in tmp){
-		if (tmp[i].startsWith("\t")) tmp[i] = tmp[i].slice(1)
-		if (tmp[i].trim()) tmp[i] += "\n"
-	}
-	returncode = tmp.join("")
+	const filename = "deobfuscated/alpha2s.js"
+	log("Saving deobfuscated code to " + filename)
+	writeToFile(filename, returncode)
 }
-log("Validating the code")
-try{
-	new Function(returncode)
+{
+    log("Minifying")
+    returncode = (minify(returncode, {mangle: {toplevel: true}})).code
+	const filename = "deobfuscated/alpha2s.min.js"
+	log("Saving minified code to " + filename)
+	writeToFile(filename, returncode)
 }
-catch(e){
-	let filename = "invalid/alpha2s.js"
-	log("Code is invalid. dumping the code to " + filename)
-	if (!fs.existsSync("invalid")) fs.mkdirSync("invalid")
-	fs.writeFileSync(filename, returncode)
-	process.exit(1)
-}
-let filename = `deobfuscated/alpha2s.js`
-log("Saving deobfuscated code to " + filename)
-if (!fs.existsSync("deobfuscated")) fs.mkdirSync("deobfuscated")
-fs.writeFileSync(filename, returncode)
-log("Minifying")
-filename = `deobfuscated/alpha2s.min.js`
-returncode = (minify(returncode, {mangle: {toplevel: true}})).code
-log("Saving minified code to " + filename)
-fs.writeFileSync(filename, returncode)
