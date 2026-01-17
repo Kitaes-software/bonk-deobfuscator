@@ -75,6 +75,10 @@ function writeToFile(filename, contents){
 	if (!fs.existsSync(dirname)) fs.mkdirSync(dirname)
 	fs.writeFileSync(filename, contents)
 }
+function test(code){
+	writeToFile("test/alpha2s.js", code)
+	process.exit(0)
+}
 let strCount = 0
 function generateRandomString(letter){
 	let str = letter + (strCount.toString(36)).padStart(3, "0")
@@ -319,7 +323,7 @@ returncode = returncode.replaceAll(new RegExp(`^((\\t+)[a-zA-Z0-9_\\$\\[\\]]+ = 
 }
 {
 	log("Unpacking arrays in for loops")
-	const matches = [...returncode.matchAll(/^.+for \(([a-zA-Z0-9_\$]+\[\d+\]) (=|in)/gm)]
+	const matches = [...returncode.matchAll(/^.+for \(([a-zA-Z0-9_\$\[\]]+) (=|in)/gm)]
 	let counter = 1
 	for (const a of matches){
 		changeStatus(counter + "/" + (matches.length))
@@ -348,6 +352,18 @@ returncode = returncode.replaceAll(new RegExp(`^((\\t+)[a-zA-Z0-9_\\$\\[\\]]+ = 
 		returncode = returncode.replace(a, "")
 	}
 	changeStatus(deadCode.length + " sections found")
+}
+{
+	log('Deobfuscating packets')
+	const varName = (returncode.match(/[a-zA-Z0-9_\$\[\]]+ = \(1, E3G\)/)[0]).split(" = ")[0]
+	for (const a of returncode.matchAll(new RegExp(escapeRegExp(varName) + "\\.(on|emit)\\(([a-zA-Z0-9_\\$\\[\\]]+)", "g"))){
+		//console.log(a[2])
+		const match = returncode.match(new RegExp(`${escapeRegExp(a[2])} = .+;`))
+		if (!match) continue
+		const varValue = match[0].split(" = ")[1].replace(";", "")
+		returncode = returncode.replace(`${a[2]} = ${varValue};`, "")
+		returncode = returncode.replace(a[2], varValue)
+	}
 }
 {
 	log("Removing unused functions")
@@ -387,9 +403,9 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		Object.assign(indexTable, noDuplicate(varList))
 		const strr = []
 		for (const i in indexTable){
-			const strn = generateRandomString("a")
-			returncode = returncode.replaceAll(`${a[2]}[${indexTable[i]}]`, strn)
-			strr.push(strn)
+			const str = a[2] + "_" + indexTable[i]
+			returncode = returncode.replaceAll(`${a[2]}[${indexTable[i]}]`, str)
+			strr.push(str)
 		}
 		returncode = returncode.replace(a[0], strr.length !== 0 ? `${a[1]}var ${strr.join(",")};` : "")
 		counter++
@@ -404,12 +420,13 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		changeStatus(counter + "/" + inits.length)
 		for (let b of a[2].split(",")){
 			b = b.trim()
-			const init = returncode.match(new RegExp(`^${a[1]}${b} = `, "m"))
+			const init = returncode.match(new RegExp(`^${a[1]}${escapeRegExp(b)} =`, "m"))
 			if (!init) {
 				difficultInits.push(b)
 				continue
 			}
-			returncode = returncode.replace("\n" + init[0], `\n${a[1]}var ${b} = `)
+			//console.log(b)
+			returncode = returncode.replace("\n" + init[0], `\n${a[1]}var ${b} =`)
 		}
 		returncode = returncode.replace(a[2], difficultInits.join(", "))
 		counter++
@@ -422,7 +439,6 @@ returncode = returncode.replaceAll(/^(\t+)(var )?[a-zA-Z0-9_\$]+ = anime\(\{/gm,
 	log("Removing unused arguments")
 	const regex = [
 		/\(([a-zA-Z0-9_\$, ]+)\) =>/g,
-		/function\(([a-zA-Z0-9_\$, ]+)\)/g,
 		/function [a-zA-Z0-9_\$]+\(([a-zA-Z0-9_\$, ]+)\)/g,
 		/[a-zA-Z0-9_\$]+\(([a-zA-Z0-9_\$, ]+)\) \{/g
 	]
@@ -522,6 +538,69 @@ returncode = returncode.replaceAll(/^(\t+)(var )?[a-zA-Z0-9_\$]+ = anime\(\{/gm,
 		returncode += escodegen.generate(ast)
 	}
 }
+if (!process.argv.includes("nominify")){
+	log("Removing useless nation check")
+	const varName = ((returncode.match(/^\t+[a-zA-Z0-9_\$]+\.europeanunion = true;/gm)[0]).split(".")[0]).trim()
+	returncode = returncode.replace(`var ${varName} = {}`, "")
+	returncode = returncode.replaceAll(new RegExp(`${escapeRegExp(varName)}\\..+`, "g"), "")
+	returncode = returncode.replace(new RegExp(`if \\(${escapeRegExp(varName)}.+`), "if (true) {")
+}
+{
+	log('Replacing "abc.colors.push(0x3F057D)" with "abc.colors = [0x3F057D]"')
+	const colors = []
+	let varName
+	const pushMatch = /^\t+([a-zA-Z0-9_\$]+)\.colors\.push\((.+)\);/gm
+	for (const a of returncode.matchAll(pushMatch)){
+		if (!varName) varName = a[1]
+		colors.push(a[2])
+	}
+	returncode = returncode.replaceAll(pushMatch, "")
+	returncode = returncode.replace(`${varName}.colors = [];`, `${varName}.colors = [${colors.join(", ")}];`)
+}
+log("Cleanup")
+returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
+{
+	log('Replacing "abc.push({})" with "abc = [{}]"')
+	const news = []
+	let varName
+	const pushMatch = /^\t+([a-zA-Z0-9_\$]+)\.push\((\{\n\t+date.+\n\t+news.+\n\t+\})\);/gm
+	for (const a of returncode.matchAll(pushMatch)){
+		if (!news.length) console.log(a[0])
+		if (!varName) varName = a[1]
+		news.push(a[2])
+	}
+	for (const a of returncode.matchAll(pushMatch)){
+		console.log(a[0])
+	}
+	returncode = returncode.replaceAll(pushMatch, "")
+	returncode = returncode.replace(`${varName} = [];`, `${varName} = [${news.join(", ")}];`)
+}
+{
+	log('Replacing "abc[1] = "Alien 1"" with "abc = ["", "Alien 1"]"')
+	const varName = ((returncode.match(/([a-zA-Z0-9_\$]+)\[1\] = "Alien 1";/g)[0]).split("[")[0]).trim()
+	const list = [""]
+	const arrMatch = new RegExp(`^\\t+${escapeRegExp(varName)}\\[(\\d+)\\] = (".+");`, "gm")
+	for (const a of returncode.matchAll(arrMatch)){
+		list[a[1]] = a[2]
+	}
+	returncode = returncode.replaceAll(arrMatch, "")
+	returncode = returncode.replace(`var ${varName} = [];`, `var ${varName} = [${list.join(", ")}];`)
+}
+{
+	log("Removing functions that do nothing")
+	returncode = returncode.replaceAll(/\.(fail|done)\(function\(.*\) \{\s*\}\)/g, "")
+	returncode = returncode.replaceAll(/\.(fail|done)\(\(.*\) => \{\s*\}\)/g, "")
+	returncode = returncode.replaceAll(/\.fail\(function\(.+\) \{\s*throw new Error.+\s*\}\)/g, "")
+}
+{
+	log('Replacing "if (abc) {} else {doSomething()}" with "if (!abc) {doSomething()}"')
+	returncode = returncode.replaceAll(/if \(.+\) {\s*}\s*else {\s*}/g, "")
+	returncode = returncode.replaceAll(/if \((.+)\) {\s*}\s*else {(.+)}/g, "if (!($1)) {$2}")
+}
+{
+	log("Removing useless code") // could become problematic in the future
+	returncode = returncode.replace(/[a-zA-Z0-9_\$]+\.keyUpFunctions[\s\S]+\};\s+moment/, "moment")
+}
 {
 	log("Replacing \"var abc = class def\" with \"class abc\"")
 	const matches = [...returncode.matchAll(/var ([a-zA-Z0-9_\$\[\]]+) = class ([a-zA-Z0-9_\$]+)/g)]
@@ -566,7 +645,7 @@ returncode = finalCleanup(returncode)
 	log("Saving deobfuscated code to " + filename)
 	writeToFile(filename, returncode)
 }
-{
+if (!process.argv.includes("nominify")){
     log("Minifying")
     returncode = (minify(returncode, {mangle: {toplevel: true}})).code
 	const filename = "deobfuscated/alpha2s.min.js"
