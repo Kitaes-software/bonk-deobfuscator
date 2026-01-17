@@ -565,12 +565,8 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 	let varName
 	const pushMatch = /^\t+([a-zA-Z0-9_\$]+)\.push\((\{\n\t+date.+\n\t+news.+\n\t+\})\);/gm
 	for (const a of returncode.matchAll(pushMatch)){
-		if (!news.length) console.log(a[0])
 		if (!varName) varName = a[1]
 		news.push(a[2])
-	}
-	for (const a of returncode.matchAll(pushMatch)){
-		console.log(a[0])
 	}
 	returncode = returncode.replaceAll(pushMatch, "")
 	returncode = returncode.replace(`${varName} = [];`, `${varName} = [${news.join(", ")}];`)
