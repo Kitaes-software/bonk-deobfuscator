@@ -538,7 +538,7 @@ returncode = returncode.replaceAll(/^(\t+)(var )?[a-zA-Z0-9_\$]+ = anime\(\{/gm,
 		returncode += escodegen.generate(ast)
 	}
 }
-if (!process.argv.includes("nominify")){
+if (!process.argv.includes("noflags")){
 	log("Removing useless nation check")
 	const varName = ((returncode.match(/^\t+[a-zA-Z0-9_\$]+\.europeanunion = true;/gm)[0]).split(".")[0]).trim()
 	returncode = returncode.replace(`var ${varName} = {}`, "")
