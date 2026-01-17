@@ -5,7 +5,7 @@ This project deobfuscates the entire [bonk.io](https://bonk.io) code contained w
 - Decipher the cipher used to obfuscate [bonk.io](https://bonk.io)'s code (your browser has to do it every time something happens)
 - Remove unused variables (there are lots of them!)
 - Replace variable names with human readable ones as specified in variableNames.ini
-- It could even replace bad code with readable code in the future!
+- It even replaces some bad code with readable code!
 ## Deobfuscated code comparison
 Obfuscated code:
 ```js
@@ -104,6 +104,12 @@ function SkinManager() {
 	}
 ```
 Not only is it way more readable now, it's also considerably shorter!
+## Command line arguments
+The command line arguments have to be used like this: `node bonkdeobf.js nominify`
+| Argument  | Description                         |
+|-----------|-------------------------------------|
+| nominify  | Do not minify the deobfuscated code |
+| noflags   | Do not remove the flag check in code|
 ## Size comparison
 Obfuscated code: 2636 KiB
 
