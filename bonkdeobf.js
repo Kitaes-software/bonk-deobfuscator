@@ -494,7 +494,7 @@ try{
 		if (!match) continue
 		const varValue = match[0].split(" = ")[1].replace(";", "")
 		returncode = returncode.replace(`${a[2]} = ${varValue};`, "")
-		returncode = returncode.replace(a[2], varValue)
+		returncode = returncode.replaceAll(a[2], varValue)
 	}
 }catch(e){changeStatus("Not found")}
 log("Cleanup")
@@ -1097,8 +1097,6 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 }
 log('Replacing "(1, abc)()" with "abc()"') // shits useless unless it's eval
 returncode = returncode.replaceAll(/\(1, ([a-zA-Z0-9_\$]+)\)\(/g, "$1(")
-log('Replacing "let abc = anime({" with "anime({"')
-returncode = returncode.replaceAll(/^(\t+)(let|const) [a-zA-Z0-9_\$]+ = anime\(\{/gm, "$1anime({")
 if (!process.argv.includes("noflags")){
 	log("Removing useless nation check")
 	const varName = ((returncode.match(/^\t+[a-zA-Z0-9_\$]+\.europeanunion = true;/gm)[0]).split(".")[0]).trim()
