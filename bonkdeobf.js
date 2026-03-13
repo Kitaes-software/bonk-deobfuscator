@@ -175,7 +175,7 @@ function setVarNames(thisOnly, code){
 				Object.assign(node, {
 	                type: "VariableDeclaration",
 	                declarations: [eo],
-					kind: "var"
+					kind: "let"
 				})
 			}
 			else if (ex.left.name === "unused"){
@@ -220,7 +220,7 @@ function setVarNames(thisOnly, code){
 				i--
 			}
 		}
-		for (let i = 0; i < 50; i++){
+		for (let i = 0; i < 100; i++){
 			log(l[i] + ": " + counts[l[i]])
 		}
 	}
@@ -260,6 +260,7 @@ const response = fs.readFileSync(path, {encoding: "utf8"})
 version = [...response.matchAll(/news:/g)].length
 log("Bonk version: " + version)
 log("Deobfuscation started")
+const t = Date.now()
 function noDuplicate(array) {
 	return [...new Set(array)]
 }
@@ -356,6 +357,8 @@ for (let i = 0; i < tmp.length; i++) {
 }
 const ARRAYFUNCTION = new RegExp(`${escapeRegExp(MAINARRAY)} = .+?(${escapeRegExp(MAINFUNCTION)}\\....)`, "").exec(splitedText[0])[1]
 log(`Replacing "${ARRAYFUNCTION}(123)" to "real data"`)
+const br = (s) => s ? s.replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/"/g, '\\"') : ""
+returncode = returncode.replaceAll(new RegExp(`${escapeRegExp(ARRAYFUNCTION)}\\(\\d+\\)`, "g"), v => `"${br(eval(v))}"`)
 tmp = noDuplicate(returncode.match(new RegExp(`${escapeRegExp(ARRAYFUNCTION)}\\((?:[^)(]|\\((?:[^)(]|\\((?:[^)(]|\\([^)(]*\\))*\\))*\\))*\\)`, "g")))
 for (let i = 0; i < tmp.length; i++) {
 	changeStatus((i+1) + "/" + tmp.length)
@@ -372,6 +375,7 @@ for (let i = 0; i < tmp.length; i++) {
 	}
 }
 log(`Replacing "${MAINARRAY}[123]" to "real data"`)
+returncode = returncode.replaceAll(new RegExp(`${escapeRegExp(MAINARRAY)}\\[\\d+\\]`, "g"), v => `"${br(eval(v))}"`)
 tmp = noDuplicate(
 	returncode.match(new RegExp(`${escapeRegExp(MAINARRAY)}\\[(?:[^\\]\\[]|\\[(?:[^\\]\\[]|\\[(?:[^\\]\\[]|\\[[^\\]\\[]*\\])*\\])*\\])*\\]`, "g"))
 )
@@ -693,6 +697,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 {
 	let forLoopDepth = -1
 	const scopes = []
+	const funcs = []
 	const vars = {}
 	function getNewLength(arr1, arr2){
 		let counter = 0
@@ -704,9 +709,8 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 	}
 	let scopeIdCount = 0
 	function blockEnter(node, parent){
-		if (node.type === "BlockStatement"){
-			node.id = scopeIdCount
-			scopeIdCount++
+		if (node.type === "FunctionDeclaration" || node.type.endsWith("FunctionExpression")){
+			funcs.push(node)
 		}
 		if (node.type.startsWith("For")){
 			forLoopDepth++
@@ -714,6 +718,9 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 			scopes.push(node)
 		}
 		else if (node.type === "BlockStatement"){
+			node.id = scopeIdCount
+			scopeIdCount++
+			node.funcs = [...funcs]
 			scopes.push(node)
 		} 
 	}
@@ -721,6 +728,9 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		if (node.type.startsWith("For")){
 			forLoopDepth--
 			scopes.pop()
+		}
+		if (node.type === "FunctionDeclaration" || node.type.endsWith("FunctionExpression")){
+			funcs.pop()
 		}
 		else if (node.type === "BlockStatement"){
 			scopes.pop()
@@ -742,6 +752,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 			const dec = node.declarations[0]
 			if (!dec.init){
 				if (!vars[dec.id.name]) vars[dec.id.name] = {
+					is: [...scopes],
 					refCount: 0,
 					modCount: -1,
 					decs: []
@@ -751,6 +762,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 			}
 			vars[dec.id.name] = {
 				scopes: [...scopes],
+				is: [...scopes],
 				refCount: 0,
 				modCount: 0,
 				decs: [dec.init]
@@ -784,6 +796,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		for (let i = 0; i < node.declarations.length; i++) {
 			const dec = node.declarations[i]
 			if (!vars[dec.id.name]) vars[dec.id.name] = {
+				is: [...scopes],
 				refCount: 0,
 				modCount: -1,
 				decs: []
@@ -842,7 +855,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 	while (x > 0) {
 		x = 0
 		for (const i in vars){
-			if (i === "f249v7"){
+			if (i === "f249v7" && version === 96){
 				continue
 			}
 			if (vars[i].modCount === -1){
@@ -863,6 +876,10 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 					}
 					if (node.type === "CallExpression"){
 						const c = node.callee
+						if (c.type.endsWith("FunctionExpression")) {
+							unsafe = true
+							return
+						}
 						if (c.type === "MemberExpression" && safeProps.includes(c.property.name)) return
 						if (c.type === "Identifier" && safeTopLevelFuncs.includes(c.name)) return
 						if (c.type !== "MemberExpression" || c.object.type === "MemberExpression") {
@@ -901,6 +918,24 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 	}
 	log("Total vars: " + vl)
 	log("Unused vars: " + unusedVars.length)
+	const vm = []
+	estraverse.traverse(ast, {enter(node, parent){
+		blockEnter(node, parent)
+		if (node.type !== "Identifier") return
+		if (parent && parent.type === "AssignmentExpression" && parent.left === node){
+			vm.push(node.name)
+			return
+		}
+		if (/f\d+v\d+/.test(node.name)){
+			if (!vars[node.name]) return
+			if (vm.includes(node.name)) return
+			if (scopes.length !== vars[node.name].scopes.length) return
+			vars[node.name].scopes = vars[node.name].is
+			vm.push(node.name)
+			return
+		}
+	},
+	leave: blockLeave})
 	// STAGE 4: put all variable declarations where they belong
 	const reps = {}
 	const initialCharCode = "i".charCodeAt(0)
@@ -921,11 +956,6 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		if (node.type !== "AssignmentExpression") return
 		if (node.left.type !== "Identifier") return
 		if (!vars[node.left.name]) return
-		if (node.left.name === "f563v142"){
-			vars[node.left.name].scopes.pop()
-			// i'm honestly pretty tired so i'll put it there
-			return
-		}
 		const varScopes = vars[node.left.name].scopes
 		if (!(varScopes.length === scopes.length && varScopes.every((e,i) => e === scopes[i]))) return
 		const xd = vars[node.left.name]
@@ -940,8 +970,6 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
       		kind: xd.modCount === 0 ? "const" : "let"
 		}
 		if (parent.type.startsWith("For")){
-			if (node.left.name === "f315v7"){
-			}
 			if (parent.init !== node) {
 				// if it reached this point, it means that chaz did some lunacy that i have to fix
 				vars[node.left.name] = xd // nevermind put it back
@@ -1113,7 +1141,7 @@ try{
 		list[a[1]] = a[2]
 	}
 	returncode = returncode.replaceAll(arrMatch, "")
-	returncode = returncode.replace(`let ${varName} = [];`, `let ${varName} = [${list.join(", ")}];`)
+	returncode = returncode.replace(`const ${varName} = [];`, `const ${varName} = [${list.join(", ")}];`)
 } catch(e){changeStatus("Not found")}
 {
 	log("Removing functions that do nothing")
@@ -1287,6 +1315,7 @@ returncode = finalCleanup(returncode)
 	log("Saving deobfuscated code to " + filename)
 	writeToFile(filename, returncode)
 }
+log(`Completed in ${((Date.now() - t) / 1000).toFixed(2)}s`)
 if (!process.argv.includes("nominify")){
     log("Minifying")
     returncode = (minify(returncode, {mangle: {toplevel: true}})).code
