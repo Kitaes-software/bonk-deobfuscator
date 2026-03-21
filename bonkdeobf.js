@@ -11,6 +11,7 @@ const escodegen = require("escodegen")
 const estraverse = require("estraverse")
 const ini = require("ini")
 const util = require("util")
+const crypto = require('crypto');
 let consoleText
 function fromAst(ast){
 	return escodegen.generate(ast, {format: {indent: {style: "\t"}}})
@@ -153,6 +154,7 @@ function setVarNames(thisOnly, code){
 		if (funcr.args){
 			const args = funcr.args.split(",")
 			for (let i = 0; i < args.length; i++){
+				if (!args[i]) continue
 				replacements[fName + "a" + i] = args[i]
 			}
 		}
@@ -161,6 +163,7 @@ function setVarNames(thisOnly, code){
 			replacements[fName + "v" + n] = funcr[n]
 		}
 	}
+	log("Renamed variables: " + Object.keys(replacements).length)
 	code = replaceVarsObj(code, replacements)
 	const ast = esprima.parseScript(code)
 	const vl = []
@@ -648,17 +651,6 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		if (node.declarations.length === 0) node.declarations[0] = eo
 	}})
 }
-	log('Replacing "abc" with "element" in "let abc = document.getElementById("element")"') // 80 characters damn, i barely managed to make it fit
-{
-	const r = {}
-	estraverse.traverse(ast, {enter(node){
-		if (!(node.type === "AssignmentExpression" && node.left.type === "Identifier")) return
-		if (!(node.right.type === "CallExpression" && node.right.callee.type === "MemberExpression")) return
-		if (!(node.right.callee.object.name === "document" && node.right.callee.property.name === "getElementById")) return
-		r[node.left.name] = (node.right.arguments[0].value).replaceAll("-", "minus")
-	}})
-	replaceVarsAstObj(ast, r)
-}
 	log("Removing unused functions")
 {
 	let unc = 1
@@ -928,6 +920,10 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		}
 		if (/f\d+v\d+/.test(node.name)){
 			if (!vars[node.name]) return
+			// if (vars[node.name].scopes.length < vars[node.name].is.length) {
+			// 	vars[node.name].scopes = vars[node.name].is
+			// 	return
+			// }
 			if (vm.includes(node.name)) return
 			if (scopes.length !== vars[node.name].scopes.length) return
 			vars[node.name].scopes = vars[node.name].is
@@ -1032,6 +1028,23 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		}
 		vd[i].scope.unshift(obj)
 	}
+}
+	log('Replacing "abc" with "element" in "let abc = document.getElementById("element")"') // 80 characters damn, i barely managed to make it fit
+{
+	const r = {}
+	const l = []
+	estraverse.traverse(ast, {enter(node,parent){
+		if (node.type !== "VariableDeclarator" || !node.init) return
+		if (!(node.init.type === "CallExpression" && node.init.callee.type === "MemberExpression")) return
+		if (!(node.init.callee.object.name === "document" && node.init.callee.property.name === "getElementById")) return
+		let nn = "el_" + (node.init.arguments[0].value).replaceAll("-", "minus")
+		if (l.includes(nn)){
+			nn += "_"
+		}
+		l.push(nn)
+		r[node.id.name] = nn
+	}})
+	replaceVarsAstObj(ast, r)
 }
 	log("Removing unused arguments")
 {
@@ -1147,7 +1160,8 @@ try{
 	returncode = returncode.replaceAll(/\.(fail|done)\(\(.*\) => \{\s*\}\)/g, "")
 	returncode = returncode.replaceAll(/\.fail\(function\(.+\) \{\s*throw new Error.+\s*\}\)/g, "")
 	returncode = returncode.replaceAll(/\(?[a-zA-Z0-9_\$]*\)? => \{\s*([a-zA-Z0-9_\$]+)\(\)\s*\}/g, "$1")
-	returncode = returncode.replaceAll(/[a-zA-Z0-9_\$]+\.on\([a-zA-Z0-9_\$"]+,.*\{\}\);/g, "")
+	returncode = returncode.replaceAll(/[a-zA-Z0-9_\$]+\.on\([a-zA-Z0-9_\$"']+,.*\{\}\);/g, "")
+	returncode = returncode.replaceAll(/\(?([a-zA-Z0-9_\$, ]+)\)? => \{[\s\n]+([a-zA-Z0-9_\$]+)\(\1\);?[\s\n]+\}/g, "$2")
 }
 {
 	log('Replacing "if (abc) {} else {doSomething()}" with "if (!abc) {doSomething()}"')
@@ -1247,9 +1261,9 @@ function getRefCount(code, v){
 	returncode = replaceVars(returncode, nv, nr).replaceAll(/^(\t+)('.*?'|-?\d+) = (.+)/gm, "$1$3").replaceAll(/\t+let (\S+) = \1;\n/g, "").replaceAll(/\t+(let|const) ZZZ;\n/g, "")
 }
 function generateHash(string){
-	return (+string).toString(16)
+	return crypto.createHash('sha256').update(string).digest('hex');
 }
-if (false){
+{
 	log("Generating hash table for functions and classes")
 	const matches = [
 		/^(\t+)()function ([a-zA-Z0-9_\$]+)\(([a-zA-Z0-9_\$, ]+)\) \{[\s\S]+?\n\1\}/gm,
