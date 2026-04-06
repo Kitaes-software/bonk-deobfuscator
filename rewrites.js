@@ -1,4 +1,4 @@
-c.f26.readInt29 = function(){
+function readInt29(){
     const bytes = []
     let offset = 0
     let val = 0

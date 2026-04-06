@@ -70,6 +70,21 @@ function replaceVars(code, oldNames, newNames){
 	}
 	return js_beautify(code, {e4x: true, indent_with_tabs: true})
 }
+const ml = []
+let mc = -1
+function removeMaps(code){
+	const match = /push\(('|")(1|2),.+('|")\)/g
+	for (const a of [...code.matchAll(match)]){
+		ml.push(a[0])
+	}
+	return code.replaceAll(match, function(e){
+		mc++
+		return "map" + mc
+	})
+}
+function returnMaps(code){
+	return code.replaceAll(/map\d+/g, (e) => ml[e.slice(3)])
+}
 function replaceVarsAst(ast, oldNames, newNames){
 	estraverse.traverse(ast, {enter(node, parent){
 		if (node.type !== "Identifier") return
@@ -236,10 +251,12 @@ function finalCleanup(code){
 	if (r){
 		code = (minify(code, {compress: false, mangle: false})).code
 	}
-	code = js_beautify(code, {e4x: true, indent_with_tabs: true})
+	code = js_beautify(code, {indent_with_tabs: true})
+	const found = code.slice(0,10).indexOf("requirejs") !== -1
 	const tmp = code.split("\n")
 	for (const i in tmp){
-		if (tmp[i].startsWith("\t")) tmp[i] = tmp[i].slice(1)
+		if (tmp[i].startsWith("\t") && found) tmp[i] = tmp[i].slice(1)
+		if (tmp[i].startsWith(" ")) tmp[i] = tmp[i].slice(1)
 		if (tmp[i].trim()) tmp[i] += "\n"
 	}
 	code = tmp.join("")
@@ -270,184 +287,592 @@ function noDuplicate(array) {
 function escapeRegExp(string) {
 	return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
-log("Unminifing the code")
-let tmp = js_beautify(response, { e4x: true, unescape_strings: true, indent_with_tabs: true })
-const splitedText = tmp.split("requirejs")
-let returncode = `requirejs${splitedText[1]}`
 log("Checking for cache")
-if (!fs.existsSync("cache/1.js")){
-log("Setting up main variables")
-const MAINFUNCTION = splitedText[0].match(/[^\[]+/)[0]
-const MAINARRAY = splitedText[0].match(/^var ([^=^\s]+);/m)[1]
-log(`eval ${MAINFUNCTION} function`)
-eval(`var ${MAINFUNCTION};${response.split("requirejs")[0]}`)
-log(`Replacing "var a = ${MAINFUNCTION}; a.bcd(123)" to "${MAINFUNCTION}.bcd(123)"`)
-tmp = returncode.match(new RegExp(`var (\\S+) = ${escapeRegExp(MAINFUNCTION)};`, ""))[1]
-returncode = returncode.replaceAll(`${tmp}.`, `${MAINFUNCTION}.`)
-log(`Replacing all duplicate functions`)
-tmp = [...splitedText[0].matchAll(new RegExp(`(?<v>${escapeRegExp(MAINFUNCTION)}\\.[\\S]+) = (?<f>function\\(\\) \\{.+?};)`, "gs"))]
-changeStatus(tmp.length)
-let VARIABLES = tmp.map((m) => m.groups.v)
-let FUNCTIONS = tmp.map((m) => m.groups.f)
-let indices = {}
-for (let i = 0; i < FUNCTIONS.length; i++) {
-	if (!indices[FUNCTIONS[i]]) {
-		indices[FUNCTIONS[i]] = []
-	}
-	indices[FUNCTIONS[i]].push(i)
-}
-for (const key in indices) {
-	const element = indices[key]
-	for (let i = 0; i < element.length; i++) {
-		splitedText[0] = splitedText[0].replaceAll(VARIABLES[element[i]], VARIABLES[element[0]])
-		returncode = returncode.replaceAll(VARIABLES[element[i]], VARIABLES[element[0]])
-	}
-}
-log(`Replacing math operation`)
-const OPERATIONEQUALVARIABLE = /case 0:\n\s+(\S+) = .+\n.+break;/gm.exec(splitedText[0])[1]
-tmp = new RegExp(
-	`return {\\s+(\\S+): function\\(\\) {\\s+var ${escapeRegExp(OPERATIONEQUALVARIABLE)}, (.+) = arguments;\\s+switch \\((.+)\\)`,
-	"gm"
-).exec(splitedText[0])
-const OPERATIONFUNCTION = new RegExp(`(${escapeRegExp(MAINFUNCTION)}\\....) = function\\(\\) {\\s+return.+${tmp[1]}`, "gm").exec(splitedText[0])[1]
-const OPERATIONFUNCTIONSETTER = new RegExp(
-	`(${escapeRegExp(MAINFUNCTION)}\\....) = function\\(\\) {\\s+return.+${escapeRegExp(
-		new RegExp(`,\\s+(\\S+): function.+\\s+${escapeRegExp(tmp[3])} =`, "gm").exec(splitedText[0])[1]
-	)}`,
-	"gm"
-).exec(splitedText[0])[1]
-const OPERATIONARGUMENTVARIABLE = escapeRegExp(tmp[2])
-tmp = returncode.match(
-	new RegExp(
-		`${escapeRegExp(OPERATIONFUNCTION)}\\((?:[^)(]|\\((?:[^)(]|\\((?:[^)(]|\\([^)(]*\\))*\\))*\\))*\\)|${escapeRegExp(
-			OPERATIONFUNCTIONSETTER
-		)}\\(\\d+\\)`,
-		"g"
-	)
-)
-// FUNCTION\((?:[^)(]|\((?:[^)(]|\((?:[^)(]|\([^)(]*\))*\))*\))*\)
-var OPERATIONFUNCTIONSETTERVALUE = 0
-for (let i = 0; i < tmp.length; i++) {
-	changeStatus((i+1) + "/" + tmp.length)
-	const element = tmp[i]
-	if (element.includes(OPERATIONFUNCTION)) {
-		const args = element.replace(`${OPERATIONFUNCTION}(`, "").replace(/.$/, "").replace(/\s/g, "").split(",")
-		if (args[args.length - 1].includes(OPERATIONFUNCTIONSETTER)) {
-			OPERATIONFUNCTIONSETTERVALUE = parseInt(new RegExp(`${escapeRegExp(OPERATIONFUNCTIONSETTER)}\\((\\d+)\\)`).exec(args[args.length - 1])[1])
-			args.pop()
+let returncode
+let ast
+if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
+    log("Cache not found, starting")
+    function initialDeobfuscation(code) {
+        ast = esprima.parseScript(code)
+        log("Code parsed")
+        function getMainFunctionName(ast) {
+            for (let node of ast.body) {
+                if (
+					node.type === "ExpressionStatement" && 
+					node.expression.type === "AssignmentExpression" && 
+					node.expression.left.type === "MemberExpression" &&
+					node.expression.left.object.type === "Identifier"
+					) {
+                    return node.expression.left.object.name
+                }
+            }
+            return null
+        }
+    
+        function getMainArray(ast) {
+            a: for (let node of ast.body) {
+                if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression") {
+                    const right = node.expression.right
+                    if (right && right.type === "ArrayExpression") {
+                        if (node.expression.left.type === "Identifier") {
+                            for (const element of right.elements) {
+                                if (!(
+                                    element.type === "CallExpression" && 
+                                    element.callee.type === "MemberExpression" && 
+                                    element.callee.object.name === MAINFUNCTION &&
+                                    element.arguments.length === 1 &&
+                                    typeof element.arguments[0].value === "number"
+                                )){
+                                    stringGetterFunctionNames.length = 0
+                                    continue a
+                                }
+                                if (!stringGetterFunctionNames.includes(element.callee.property.name)) {
+                                    stringGetterFunctionNames.push(element.callee.property.name)
+                                }
+                            }
+                            return node.expression.left.name
+                        }
+                    }
+                }
+            }
+            return null
+        }
+    
+        const MAINFUNCTION = getMainFunctionName(ast)
+        if (MAINFUNCTION == null) {
+            log("MAINFUNCTION not found, probably not obfuscated")
+            return
+        }
+        const stringGetterFunctionNames = []
+        const MAINARRAY = getMainArray(ast)
+		let filteredObfCode = []
+		const funcsToFilter = [MAINFUNCTION]
+		function filterCode(node){
+			filteredObfCode.push(ast.body.splice(ast.body.indexOf(node), 1)[0])
 		}
-		var value = new RegExp(`case ${OPERATIONFUNCTIONSETTERVALUE}:\\n\\s+${escapeRegExp(OPERATIONEQUALVARIABLE)} = (.+);\\n.+break;`, "gm").exec(
-			splitedText[0]
-		)[1]
-		for (let j = 0; j < args.length; j++) {
-			value = value.replaceAll(`${OPERATIONARGUMENTVARIABLE}[${j}]`, args[j])
+		let x = true
+		for (let i = 0; i < ast.body.length; i++) {
+			function filter(index, count = 1){
+				filteredObfCode.push(...ast.body.splice(index, count))
+				i -= count
+			}
+			const node = ast.body[i]
+			if (node.type === "ExpressionStatement" && node.expression.type === "CallExpression"){
+				const ex = node.expression
+				if (!ex.arguments[0]) continue
+				const arg = ex.arguments[0]
+				if (x && arg.type === "CallExpression" && arg.callee.name.length === 4 && ex.callee.name.length === 4){
+					filter(i)
+					funcsToFilter.push(ex.callee.name)
+					funcsToFilter.push(arg.callee.name)
+				}
+				else x = false
+				if (arg.type === "MemberExpression"){
+					if (arg.object.name === MAINFUNCTION){
+						filter(i)
+						funcsToFilter.push(ex.callee.name)
+					}
+				}
+			}
+			else if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression") {
+				const left = node.expression.left
+				const right = node.expression.right
+				if (right.type === "Identifier") funcsToFilter.push(right.name)
+				else if (right.type === "CallExpression") {
+					if (right.callee.type === "Identifier") funcsToFilter.push(right.callee.name)
+				}
+				if (left.type === "MemberExpression"){
+					if (left.object.name === MAINFUNCTION){
+						filter(i)
+					}
+					else if (left.object.type === "MemberExpression" && left.object.object.name === MAINFUNCTION){
+						filter(i)
+					}
+				}
+				else if (left.type === "Identifier" && left.name === MAINARRAY){
+					filter(i)
+				}
+			}
+			else if (node.type === "VariableDeclaration"){
+				if (node.declarations[0].id.name === MAINARRAY) {
+					filter(i)
+				}
+			}
+			else if (node.type === "FunctionDeclaration"){
+				if (funcsToFilter.includes(node.id.name)) {
+					filter(i)
+				}
+			}
+			else if (node.type === "ForStatement"){
+				if (!node.init && !node.update && node.test && node.test.type === "BinaryExpression"){
+					const prevNode = ast.body[i-1]
+					if (prevNode.type === "VariableDeclaration"){
+						filter(i-1, 2)
+					}
+				}
+			}
 		}
-		try {
-			value = eval(value)
-		} catch (error) {
-		} finally {
-			returncode = returncode.replace(element, value)
+		filteredObfCode = {type: "Program", body: filteredObfCode}
+		const obfCode = escodegen.generate(filteredObfCode)
+        const mainFunctionNames = [MAINFUNCTION]
+        const mainArrayNames = [MAINARRAY]
+		let MAINFUNCTIONEVAL, MAINARRAYEVAL
+		const c = `const window=globalThis;${obfCode};`;
+		if (!MAINARRAY){
+			const sandboxCode = new Function(`${c}return ${MAINFUNCTION}`);
+        	MAINFUNCTIONEVAL = sandboxCode()
 		}
-	} else {
-		OPERATIONFUNCTIONSETTERVALUE = parseInt(new RegExp(`${escapeRegExp(OPERATIONFUNCTIONSETTER)}\\((\\d+)\\)`).exec(element)[1])
-	}
-}
-log(`Replacing "var a = ${MAINARRAY}; a[123]" to "${MAINARRAY}[123]"`)
-tmp = [...returncode.matchAll(new RegExp(`\\s+(?<v>\\S+) = ${escapeRegExp(MAINARRAY)}.*$`, "gm"))].map((m) => m.groups.v)
-for (let i = 0; i < tmp.length; i++) {
-	changeStatus((i+1) + "/" + tmp.length)
-	returncode = returncode.replaceAll(tmp[i], MAINARRAY)
-}
-const ARRAYFUNCTION = new RegExp(`${escapeRegExp(MAINARRAY)} = .+?(${escapeRegExp(MAINFUNCTION)}\\....)`, "").exec(splitedText[0])[1]
-log(`Replacing "${ARRAYFUNCTION}(123)" to "real data"`)
-const br = (s) => s ? s.replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/"/g, '\\"') : ""
-returncode = returncode.replaceAll(new RegExp(`${escapeRegExp(ARRAYFUNCTION)}\\(\\d+\\)`, "g"), v => `"${br(eval(v))}"`)
-tmp = noDuplicate(returncode.match(new RegExp(`${escapeRegExp(ARRAYFUNCTION)}\\((?:[^)(]|\\((?:[^)(]|\\((?:[^)(]|\\([^)(]*\\))*\\))*\\))*\\)`, "g")))
-for (let i = 0; i < tmp.length; i++) {
-	changeStatus((i+1) + "/" + tmp.length)
-	const element = tmp[i]
-	try {
-		returncode = returncode.replaceAll(element, `"${eval(element).replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/"/g, '\\"')}"`)
-	} catch (error) {
-		const args = element.replace(`${ARRAYFUNCTION}(`, "").replace(/.$/, "")
-		const value = parseInt(new RegExp(`${escapeRegExp(args)} = (\\d+)`).exec(returncode)[1])
-		returncode = returncode.replaceAll(
-			element,
-			`"${eval(`${ARRAYFUNCTION}(${value})`).replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/"/g, '\\"')}"`
-		)
-	}
-}
-log(`Replacing "${MAINARRAY}[123]" to "real data"`)
-returncode = returncode.replaceAll(new RegExp(`${escapeRegExp(MAINARRAY)}\\[\\d+\\]`, "g"), v => `"${br(eval(v))}"`)
-tmp = noDuplicate(
-	returncode.match(new RegExp(`${escapeRegExp(MAINARRAY)}\\[(?:[^\\]\\[]|\\[(?:[^\\]\\[]|\\[(?:[^\\]\\[]|\\[[^\\]\\[]*\\])*\\])*\\])*\\]`, "g"))
-)
-// ARRAY\[(?:[^\]\[]|\[(?:[^\]\[]|\[(?:[^\]\[]|\[[^\]\[]*\])*\])*\])*\]
-for (let i = 0; i < tmp.length; i++) {
-	changeStatus((i+1) + "/" + tmp.length)
-	const element = tmp[i]
-	try {
-		returncode = returncode.replaceAll(element, `"${eval(element).replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/"/g, '\\"')}"`)
-	} catch (e) {
-		var args = element.replace(`${MAINARRAY}[`, "").replace(/.$/, "")
-		try{
-			var value = parseInt(new RegExp(`${escapeRegExp(args)} = (\\d+)`).exec(returncode)[1])
+		else{
+        	const sandboxCode = new Function(`${c}return [${MAINFUNCTION}, ${MAINARRAY}]`);
+        	[MAINFUNCTIONEVAL, MAINARRAYEVAL] = sandboxCode()
 		}
-		catch(e) {
-			returncode = returncode.replaceAll(element, '"undefined"')
+        let scopeStack = []
+        let globalScope = {}
+    
+        function resolveVariable(name) {
+            for (let i = scopeStack.length - 1; i >= 0; i--) {
+                const scope = scopeStack[i]
+                if (scope[name]) {
+                    return scope[name]
+                }
+            }
+            return globalScope[name] || null
+        }
+        function getNodeValue(node){
+            if (node.type === "Identifier") {
+                return node.name
+            } else if (node.type === "MemberExpression" && node.object.type === "Identifier" && node.property.type === "Literal") {
+                return `${node.object.name}[${node.property.value}]`
+            }
+        }
+        function scopePush(node, id){
+            const chk = id ? "Identifier" : "Literal"
+            const prop = id ? "name" : "value"
+            if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression") {
+                scopeStack.push({})
+            }
+            if (node.type === "VariableDeclarator") {
+                const currentScope = scopeStack[scopeStack.length - 1] || globalScope
+                if (node.init && node.init.type === chk) {
+                    currentScope[node.id.name] = node.init[prop]
+                }
+            }
+            if (node.type === "AssignmentExpression") {
+                const currentScope = scopeStack[scopeStack.length - 1] || globalScope
+                if (node.right.type === "UnaryExpression" && node.right.operator === "-" && node.right.argument.type === chk){
+                    currentScope[getNodeValue(node.left)] = -node.right.argument[prop]
+                }
+                if (node.right.type === chk) {
+                    currentScope[getNodeValue(node.left)] = node.right[prop]
+                }
+            }
+        }
+        function scopePop(node){
+            if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression") {
+                scopeStack.pop()
+            }
+        }
+        // Finding alternative names
+		estraverse.replace(ast, {enter(node){
+			if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression") {
+				const ex = node.expression
+				if (!getNodeValue(ex.left)) return
+				if (mainArrayNames.includes(ex.right.name)){
+					mainArrayNames.push(getNodeValue(ex.left))
+					this.remove()
+				}
+				else if (mainFunctionNames.includes(ex.right.name)){
+					mainFunctionNames.push(getNodeValue(ex.left))
+					this.remove()
+				}
+			}
+			else if (node.type === "VariableDeclaration"){
+				for (let i = 0; i < node.declarations.length; i++){
+					const dec = node.declarations[i]
+					if (!(dec.init && dec.init.type === "Identifier")) return
+					if (mainArrayNames.includes(dec.init.name)){
+						mainArrayNames.push(dec.id.name)
+					}
+					else if (mainFunctionNames.includes(dec.init.name)){
+						mainFunctionNames.push(dec.id.name)
+					}
+					else return
+					node.declarations.splice(i, 1)
+					i--
+				}
+				if (node.declarations.length === 0) this.remove()
+			}
+		}})
+        // Get Math Operation Property Name
+        let mathGetterPropertyName, mathSetterPropertyName, mathSwitch
+        estraverse.replace(filteredObfCode, {
+            enter(node) {
+                if (node.type === "ObjectExpression" && node.properties.length === 2) {
+                    const firstNode = node.properties[0]
+                    const secondNode = node.properties[1]
+                    if (firstNode.key.type === "Identifier" && firstNode.value.type === "FunctionExpression" && firstNode.value.body.type === "BlockStatement") {
+                        const body = firstNode.value.body.body
+                        for (const element of body) {
+                            if (element.type === "SwitchStatement") {
+                                mathGetterPropertyName = firstNode.key.name
+                                mathSetterPropertyName = secondNode.key.name
+                                mathSwitch = element
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        if (mathGetterPropertyName == null || mathSetterPropertyName == null || mathSwitch == null) {
+            log("Math Operation not found")
+            return
+        }
+    
+        // Get Math Operation Function Name
+        const mathGetterFunctionNames = []
+        const mathSetterFunctionNames = []
+        for (let node of filteredObfCode.body) {
+            if (node.type === "ExpressionStatement") node = node.expression
+            if (node.type === "AssignmentExpression") {
+                if (
+                    node.left.type === "MemberExpression" &&
+                    node.left.object.type === "Identifier" &&
+                    mainFunctionNames.includes(node.left.object.name) &&
+                    node.left.property.type === "Identifier" &&
+                    node.right.type === "FunctionExpression" &&
+                    node.right.body.type === "BlockStatement" &&
+                    node.right.body.body.length === 1 &&
+                    node.right.body.body[0].type === "ReturnStatement" &&
+                    node.right.body.body[0].argument.type === "ConditionalExpression" &&
+                    node.right.body.body[0].argument.alternate.type === "MemberExpression" &&
+                    node.right.body.body[0].argument.alternate.property &&
+                    node.right.body.body[0].argument.alternate.property.type === "Identifier"
+                ) {
+                    if (node.right.body.body[0].argument.alternate.property.name === mathGetterPropertyName) {
+                        mathGetterFunctionNames.push(node.left.property.name)
+                    }
+                    if (node.right.body.body[0].argument.alternate.property.name === mathSetterPropertyName) {
+                        mathSetterFunctionNames.push(node.left.property.name)
+                    }
+                }
+            }
+        }
+        // FROM: mathSetterFunctionNames(0); var a = mathGetterFunctionNames(1, 2); var b = mathGetterFunctionNames(variable1, 1)
+        // TO: var a = 1; var b = 1 - variable1
+        let tmpMathSetterArg
+        estraverse.replace(ast, {
+            enter(node) {
+                if (node.type === "CallExpression") {
+                    if (
+                        node.callee.type === "MemberExpression" &&
+                        node.callee.object.type === "Identifier" &&
+                        mainFunctionNames.includes(node.callee.object.name) &&
+                        node.callee.property.type === "Identifier"
+                    ) {
+                        if (mathSetterFunctionNames.includes(node.callee.property.name)) {
+                            tmpMathSetterArg = node.arguments[0].value
+                        } else if (mathGetterFunctionNames.includes(node.callee.property.name)) {
+                            let argsAllLiteral = true
+                            const args = []
+                            const argsValue = []
+    
+                            for (const arg of node.arguments) {
+                                args.push(arg)
+                                if (arg.type !== "Literal") {
+                                    argsAllLiteral = false
+                                    if (
+                                        arg.type === "CallExpression" && 
+                                        arg.callee.type === "MemberExpression" &&
+                                        mainFunctionNames.includes(arg.callee.object.name) &&
+                                        mathSetterFunctionNames.includes(arg.callee.property.name)
+                                    ){
+                                        tmpMathSetterArg = arg.arguments[0].value // order of execution
+                                    }
+                                } else {
+                                    argsValue.push(arg.value)
+                                }
+                            }
+    
+                            if (argsAllLiteral) {
+                                MAINFUNCTIONEVAL[mathSetterFunctionNames[0]](tmpMathSetterArg)
+                                const result = MAINFUNCTIONEVAL[mathGetterFunctionNames[0]](...argsValue)
+                                if (result >= 0) {
+                                    return {
+                                        type: "Literal",
+                                        value: result,
+                                        raw: String(result)
+                                    }
+                                } else {
+                                    return {
+                                        type: "UnaryExpression",
+                                        operator: "-",
+                                        prefix: true,
+                                        argument: {
+                                            type: "Literal",
+                                            value: Math.abs(result),
+                                            raw: String(Math.abs(result))
+                                        }
+                                    }
+                                }
+                            } else {
+                                for (const switchCase of mathSwitch.cases) {
+                                    if (switchCase.test.value === tmpMathSetterArg) {
+                                        let BinaryExpression = JSON.parse(JSON.stringify(switchCase.consequent[0].expression.right))
+                                        estraverse.traverse(BinaryExpression, {enter(node){
+                                            if (node.type === "MemberExpression"){
+                                                Object.assign(node, args[node.property.value])
+                                                this.skip()
+                                            }
+                                        }})
+                                        return BinaryExpression
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+		if (stringGetterFunctionNames.length === 0){
+			let stringGetterPropertyName
+			for (let node of filteredObfCode.body){
+				if (
+					node.type === "ExpressionStatement" &&
+					node.expression.type === "AssignmentExpression" &&
+					node.expression.left.type === "MemberExpression" &&
+					node.expression.left.object.name === MAINFUNCTION &&
+					node.expression.right.type === "CallExpression" &&
+					node.expression.right.callee.type === "FunctionExpression" &&
+					node.expression.right.callee.body.type === "BlockStatement"
+					){
+					estraverse.traverse(node.expression.right.callee.body, {enter(node,parent){
+						if (
+							node.type === "CallExpression" && 
+							node.arguments.length === 1 &&
+							node.arguments[0].type === "Literal" &&
+							typeof node.arguments[0].value === "string" &&
+							node.arguments[0].value.length === 6
+							){
+							stringGetterPropertyName = parent.key.name
+						}
+					}})
+				}
+			}
+			if (stringGetterPropertyName){
+				for (let node of filteredObfCode.body) {
+					if (node.type === "ExpressionStatement") node = node.expression
+					if (node.type === "AssignmentExpression") {
+						if (
+							node.left.type === "MemberExpression" &&
+							node.left.object.type === "Identifier" &&
+							mainFunctionNames.includes(node.left.object.name) &&
+							node.left.property.type === "Identifier" &&
+							node.right.type === "FunctionExpression" &&
+							node.right.body.type === "BlockStatement" &&
+							node.right.body.body.length === 1 &&
+							node.right.body.body[0].type === "ReturnStatement" &&
+							node.right.body.body[0].argument.type === "ConditionalExpression" &&
+							node.right.body.body[0].argument.alternate.type === "MemberExpression" &&
+							node.right.body.body[0].argument.alternate.property &&
+							node.right.body.body[0].argument.alternate.property.type === "Identifier" &&
+							node.right.body.body[0].argument.alternate.property.name === stringGetterPropertyName
+						) {
+							stringGetterFunctionNames.push(node.left.property.name)
+						}
+					}
+				}
+			}
 		}
-		returncode = returncode.replaceAll(new RegExp("([^0-9a-zA-Z_])" + escapeRegExp(element), "g"), `$1"${eval(`${MAINARRAY}[${value}]`).replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/"/g, '\\"')}"`)
-	}
-}
-tmp = []
-log(`Removing ${MAINARRAY}`);
-returncode = returncode.replaceAll(new RegExp(`\\n\\s*${escapeRegExp(MAINARRAY)} = ${escapeRegExp(MAINARRAY)};`, 'g'), "")
-returncode = returncode.replaceAll(new RegExp(`\\n\\s*var ${escapeRegExp(MAINARRAY)};`, 'g'), "")
-returncode = returncode.replaceAll(MAINARRAY + ", ", "")
-returncode = returncode.replaceAll(", " + MAINARRAY, "")
-returncode = returncode.replaceAll(new RegExp(`${escapeRegExp(MAINARRAY)} = \\[.+?\\];\\n`, 'g'), "")
-log(`Removing ${MAINFUNCTION}.abc(); and var abc = ${MAINFUNCTION};`);
-returncode = returncode.replaceAll(new RegExp(`\\n\\s+${escapeRegExp(MAINFUNCTION)}\.[a-zA-Z0-9_\$]{3}\(.*?\);`, 'g'), "")
-returncode = returncode.replaceAll(new RegExp(`\\n\\s+var [a-zA-Z0-9_\$]{3} = ${escapeRegExp(MAINFUNCTION)};`, 'g'), "")
-log("Removing empty if statements")
-returncode = returncode.replaceAll(/if \(.+?\) \{\s*\}(?! else)/gm, "")
-log("Replacing all array indexing with dot indexing")
-returncode = returncode.replaceAll(/\["([a-zA-Z_$][a-zA-Z0-9_\$]*?)"\]/g, ".$1")
-log("Cleanup")
-returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
-log("Removing nonsensical if-statements")
-while(true){
-	const l = [...returncode.matchAll(/((\t+)[a-zA-Z0-9_\$]{3}\[\d+\] = -?\d+;\n){6}\2if \(.+\) \{([\s\S]+?)\n\2\}/gm)]
-	if (l.length === 0) break
-	returncode = returncode.replaceAll(/((\t+)[a-zA-Z0-9_\$]{3}\[\d+\] = -?\d+;\n){6}\2if \(.+\) \{([\s\S]+?)\n\2\}/gm, "$3")
-}
-log("Removing nonsensical for-loops followed by nonsensical if-statements")
-for (const vars of returncode.matchAll(new RegExp(`^(\\t+)[a-zA-Z0-9_\\$\\[\\]]+ = (-?\\d+);\\n\\1[a-zA-Z0-9_\\$\\[\\]]+ = (-?\\d+);\\n\\1[a-zA-Z0-9_\\$\\[\\]]+ = (-?\\d+);\\n\\1for \\((var )?[a-zA-Z0-9_\\$\\[\\]]+ = (\\d+);.*(${MAINFUNCTION}\\.[a-zA-Z0-9_\\$]+).+?(\\d+)\\).+\\) \\{\\n((\\1\\t.*?\\n)+)(\\1\\t[a-zA-Z0-9_\\$\\[\\]]+ \\+= 2;\\n)?\\1\\}\\n\\1if \\(.*\\7.+?(\\d+)\\).+\\) \\{([\\s\\S]+?)\\n\\1\\}`, "gm"))){
-	let x = +vars[2]
-	let y = +vars[3]
-	let z = +vars[4]
-	let w = +vars[6]
-	let func = eval(vars[7])
-	let mn1 = +vars[8]
-	let mn2 = +vars[12]
-	let a = false
-	for (let i = w; func(i.toString(), i.toString().length, mn1) !== x; i++){
-		z += 2;
-		a = true
-	}
-	const b = func(z.toString(), z.toString().length, mn2) !== y
-	let str = ""
-	if (vars[10] === vars[9]) vars[10] = "#"
-	if (a) str += vars[9].replace(vars[10], "")
-	if (b) str += vars[13]
-	returncode = returncode.replace(vars[0], str)
-}
-log("Removing useless for-loops")
-returncode = returncode.replaceAll(new RegExp(`^((\\t+)[a-zA-Z0-9_\\$\\[\\]]+ = -?\\d+;\\n){2}\\2for \\(.*${MAINFUNCTION}.*\\n.*\\n\\2\\}`, "gm"), "")
-writeToFile("cache/1.js", returncode)
+        // FROM: var a = stringGetterFunctionName(10); var a = MAINARRAY[10]
+        // TO: var a = "real string value"
+        // Remove Literal = Literal
+        // Remove if (true)
+        scopeStack = []
+        globalScope = {}
+        function ret(res,node,parent){
+            if (parent.type === "MemberExpression" && parent.object !== node){
+                parent.computed = false
+                return {
+                    type: "Identifier",
+                    name: res
+                }
+            }
+            return {
+                type: "Literal",
+                value: res
+            }
+        }
+        estraverse.replace(ast, {
+            enter(node, parent) {
+                scopePush(node)
+                if (node.type === "CallExpression") {
+                    if (
+                        node.callee.type === "MemberExpression" &&
+                        node.callee.object.type === "Identifier" &&
+                        mainFunctionNames.includes(node.callee.object.name) &&
+                        node.callee.property.type === "Identifier"
+                    ) {
+                        if (stringGetterFunctionNames.includes(node.callee.property.name)) {
+                            if (node.arguments[0].type === "Literal") {
+                                const result = MAINFUNCTIONEVAL[stringGetterFunctionNames[0]](node.arguments[0].value)
+                                return ret(result,node,parent)
+                            } else if (node.arguments[0].type === "Identifier") {
+                                const resolved = resolveVariable(node.arguments[0].name)
+                                if (resolved !== null && resolved.toString() !== "NaN" && typeof resolved === "number") {
+                                    if (resolved >= 0) {
+                                        const result = MAINFUNCTIONEVAL[stringGetterFunctionNames[0]](resolved)
+                                        return ret(result,node,parent)
+                                    }
+                                }
+                            } else if (
+                                node.arguments[0].type === "MemberExpression" &&
+                                node.arguments[0].object.type === "Identifier" &&
+                                node.arguments[0].property.type === "Literal"
+                            ) {
+                                const resolved = resolveVariable(`${node.arguments[0].object.name}[${node.arguments[0].property.value}]`)
+                                if (resolved !== null && resolved.toString() !== "NaN" && typeof resolved === "number") {
+                                    if (resolved >= 0) {
+                                        const result = MAINFUNCTIONEVAL[stringGetterFunctionNames[0]](resolved)
+                                        return ret(result,node,parent)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else if (
+                    node.type === "MemberExpression" && 
+                    (node.object.type === "Identifier" || node.object.type === "MemberExpression") && 
+                    mainArrayNames.includes(getNodeValue(node.object))
+                ) {
+                    if (node.property.type === "Literal") {
+                        const result = MAINARRAYEVAL[node.property.value]
+                        if (result == null) {
+                            // null main array
+                        } else {
+                            return ret(result,node,parent)
+                        }
+                    } else if (node.property.type === "Identifier") {
+                        const resolved = resolveVariable(node.property.name)
+                        if (resolved !== null && resolved.toString() !== "NaN" && typeof resolved === "number") {
+                            if (resolved >= 0) {
+                                const result = MAINARRAYEVAL[resolved]
+                                if (result == null) {
+                                    // null main array
+                                } else {
+                                    return ret(result,node,parent)
+                                }
+                            }
+                        }
+                    } else if (node.property.type === "MemberExpression" && node.property.object.type === "Identifier" && node.property.property.type === "Literal") {
+                        const resolved = resolveVariable(`${node.property.object.name}[${node.property.property.value}]`)
+                        if (resolved !== null && resolved.toString() !== "NaN" && typeof resolved === "number") {
+                            if (resolved >= 0) {
+                                const result = MAINARRAYEVAL[resolved]
+                                if (result == null) {
+                                    // null main array
+                                } else {
+                                    return ret(result,node,parent)
+                                }
+                            }
+                        }
+                    }
+                }
+                else if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression") {
+                    const left = node.expression.left
+                    const right = node.expression.right
+                    if (left.type === "Identifier" && right.type === "Identifier" && left.name === right.name) {
+                        this.remove()
+                    } else if (left.type === "Literal" && right.type === "Literal" && left.value === right.value) {
+                        this.remove()
+                    }
+                }
+                else if (node.type === "IfStatement"){
+                    let test = node.test
+                    if (test.type === "UnaryExpression" && test.operator === "!"){
+                        test = test.argument
+                    }
+					if (test.right && test.right.type === "UnaryExpression" && test.right.operator === "!") {
+						test.right = test.right.argument
+					}
+                    if (
+                        test.type === "LogicalExpression" && ((
+							test.right.type === "BinaryExpression" &&
+                        	test.right.left.type === "CallExpression" && 
+                        	test.right.left.callee.type === "MemberExpression" &&
+                        	mainFunctionNames.includes(test.right.left.callee.object.name) &&
+                        	test.right.left.arguments && 
+                        	test.right.left.arguments.length === 3 &&
+                        	test.right.left.arguments[0].value === 0 &&
+                        	test.right.left.arguments[1].value === false &&
+                        	typeof test.right.left.arguments[2].value === "number"
+						) || (
+							test.right.type === "CallExpression" &&
+							test.right.callee.type === "MemberExpression" &&
+                        	mainFunctionNames.includes(test.right.callee.object.name)
+						))
+                    ) {
+                        const index = parent.body.indexOf(node)
+                        parent.body.splice(index, 1, ...node.consequent.body)
+                    }
+                }
+                else if (node.type === "EmptyStatement") this.remove()
+            }, scopePop
+        })
+        scopeStack = []
+        globalScope = {}
+        // Remove MAINFUNCTION.abc(); 
+		estraverse.replace(ast, {enter(node,parent){
+			if (
+                node.type === "ExpressionStatement" && 
+                node.expression.type === "CallExpression" &&
+                node.expression.callee.type === "MemberExpression" &&
+                mainFunctionNames.includes(node.expression.callee.object.name)
+                ) this.remove()
+		}})
+        // Remove code traps
+        estraverse.replace(ast, {enter(node, parent){
+            scopePush(node)
+            if (
+                node.type === "ForStatement" &&
+                node.test.type === "BinaryExpression" && 
+                node.test.operator === "!==" &&
+                node.test.left.type === "CallExpression" &&
+                node.test.left.callee.type === "MemberExpression" &&
+                mainFunctionNames.includes(node.test.left.callee.object.name)
+                ) {
+                    let resultAst = []
+                    const funcCall = node.test.left
+                    const idx = parent.body.indexOf(node)
+					let ifs
+					for(let i = idx+1; !ifs || ifs.type !== "IfStatement"; i++){
+						ifs = parent.body[i]
+					}
+                    if (
+                        MAINFUNCTIONEVAL[funcCall.callee.property.name]("1", 1, funcCall.arguments[2].value) !== 
+                        resolveVariable(getNodeValue(node.test.right))
+                        ){
+                            const lastStatement = node.body.body[node.body.body.length-1]
+                            if (lastStatement && lastStatement.type !== "ReturnStatement") resultAst = node.body.body.slice(0,-1)
+                            else resultAst = node.body.body
+                        }
+                    else if (
+						MAINFUNCTIONEVAL[funcCall.callee.property.name]("2", 1, ifs.test.left.arguments[2].value) !== 
+						resolveVariable(getNodeValue(ifs.test.right))
+						){
+                        resultAst = ifs.consequent.body
+                    }
+                    parent.body.splice(idx, 2, ...resultAst)
+                }
+        }, scopePop})
+        // Generate updated code
+        return fromAst(ast)
+    }
+    returncode = removeMaps(initialDeobfuscation(response))
+    writeToFile("cache/1.js", returncode)
 }
 else{
-	returncode = fs.readFileSync("cache/1.js", {encoding: "utf8"})
+	returncode = removeMaps(fs.readFileSync("cache/1.js", {encoding: "utf8"}))
 }
 {
 	log("Removing dead code")
@@ -468,26 +893,6 @@ else{
 		returncode = returncode.replace(a, "")
 	}
 	changeStatus(deadCode.length + " sections found")
-}
-{
-	log("Removing unused functions")
-	const funcDecs = /function ([a-zA-Z0-9_\$]+)\(.*\) \{/gm
-	const funcList = []
-	for (const a of returncode.matchAll(funcDecs)){
-		funcList.push(a[1])
-	}
-	log("Total functions: " + funcList.length)
-	let filteredCode = returncode.replaceAll(funcDecs, "")
-	filteredCode = noStrings(filteredCode)
-	const unusedVars = []
-	for (const a of funcList){
-		if (!filteredCode.includes(a)) unusedVars.push(a)
-	}
-	log("Unused functions: " + unusedVars.length)
-	for (const a of unusedVars){
-		const regex = new RegExp(`^(\\t*)function ${escapeRegExp(a)}\\(.*\\) \\{[\\s\\S]+?\\n\\1\\}`, "m")
-		returncode = returncode.replace(regex, "")
-	}
 }
 try{
 	log('Deobfuscating packets')
@@ -522,6 +927,13 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		}
 		return code
 	}
+    function makeSafeAst(ast){
+		estraverse.traverse(ast, {enter(node, parent){
+            if (node.type === "Identifier" && !(parent.type === "MemberExpression" && parent.property === node && !parent.computed)){
+                if (node.name.startsWith("f")  && !isNaN(parseInt(node.name[1])))node.name = "_" + node.name
+            }
+        }})
+	}
 	returncode = makeSafe(returncode)
 	const ast = esprima.parseScript(returncode)
 {
@@ -545,6 +957,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 	const xd = []
 	let cn
 	function renameArgs(node){
+		if (!node) return
 		for (let i = 0; i < node.params.length; i++){
 			let param = node.params[i]
 			if (param.type === "RestElement") param = param.argument
@@ -556,6 +969,8 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 	}
 	estraverse.traverse(ast, {enter(node, parent){
 		if (node.type === "VariableDeclarator" && !(node.init && node.init.elements && node.init.elements[0].name === "arguments") && !parent.unmarked){
+			// global scope exists for some reason, do not touch it
+			if (ast.body.indexOf(parent) !== -1) return
 			// looks like the obfuscation failed there for some unknown reason, it mostly happens in render func
 			if (xd.includes(node.id.name)) return
 			xd.push(node.id.name)
@@ -570,6 +985,8 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 			return
 		}
 	    if (!node.type.endsWith("FunctionExpression") && node.type !== "FunctionDeclaration") return
+		// function in global scope, do not touch
+		if (parent === ast) return
 		cn = node
 		if (shouldCount) {
 			shouldCount = false
@@ -659,7 +1076,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		const funcs = {}
 		const emptyFuncs = []
 		estraverse.traverse(ast, {enter(node, parent){
-			if (node.type === "FunctionDeclaration" && node.id.name){
+			if (node.type === "FunctionDeclaration" && node.id.name && parent !== ast){
 				funcs[node.id.name] = {node: node, parent: parent, used: false}
 				if (node.body.length === 0) {
 					emptyFuncs.push(node.id.name)
@@ -1110,13 +1527,15 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 }
 log('Replacing "(1, abc)()" with "abc()"') // shits useless unless it's eval
 returncode = returncode.replaceAll(/\(1, ([a-zA-Z0-9_\$]+)\)\(/g, "$1(")
-if (!process.argv.includes("noflags")){
+if (!process.argv.includes("noflags")){ try{
 	log("Removing useless nation check")
 	const varName = ((returncode.match(/^\t+[a-zA-Z0-9_\$]+\.europeanunion = true;/gm)[0]).split(".")[0]).trim()
 	returncode = returncode.replace(`let${varName} = {}`, "")
 	returncode = returncode.replaceAll(new RegExp(`${escapeRegExp(varName)}\\..+`, "g"), "")
 	returncode = returncode.replace(new RegExp(`if \\(${escapeRegExp(varName)}.+`), "if (true) {")
-}
+} catch(e){
+	log("Nation check not found")
+}}
 {
 	log('Replacing "abc.colors.push(0x3F057D)" with "abc.colors = [0x3F057D]"')
 	const colors = []
@@ -1207,9 +1626,62 @@ function getRefCount(code, v){
 	}
 	return result
 }
+log("Renumbering variables")
 {
-	log("Removing duplicate constants")
-	const ast = esprima.parseScript(returncode)
+    const ast = esprima.parseScript(returncode)
+    makeSafeAst(ast)
+    const replacements = {}
+    let functionCounter = -1
+    const varCounters = {}
+    const funcScopeIds = []
+    let shouldCount = true
+    function renameArgs(node){
+		for (let i = 0; i < node.params.length; i++){
+			replacements[getArgName(node.params[i])] = "f" + functionCounter + "a" + i
+		}
+	}
+    function getArgName(node){
+        if (node.type === "RestElement") node = node.argument
+        else if (node.type === "AssignmentPattern") node = node.left
+        return node.name
+    }
+    estraverse.traverse(ast, {enter(node, parent){
+        if (
+            node.type === "FunctionDeclaration" ||
+            node.type === "FunctionExpression" ||
+            node.type === "ArrowFunctionExpression"
+        ) {
+            if (shouldCount) functionCounter++
+            varCounters[functionCounter] = 0
+            funcScopeIds.push(functionCounter)
+            if (node.id || node.params.length > 0) shouldCount = true
+            else shouldCount = false
+            const newFname = "f" + functionCounter
+            if (node.id && parent !== ast) replacements[node.id.name] = newFname
+            renameArgs(node)
+        }
+        else if (
+            (node.type === "VariableDeclarator" ||
+            node.type === "ClassDeclaration") 
+            && /^_f\d+(v\d+)?$/.test(node.id.name)
+            ){
+			if (funcScopeIds.length === 0) return
+            shouldCount = true
+            const fi = funcScopeIds[funcScopeIds.length-1]
+            if (!replacements[node.id.name]) replacements[node.id.name] = `f${fi}v${varCounters[fi]}`
+            varCounters[fi]++
+        }
+    }, leave(node){
+        if (
+            node.type === "FunctionDeclaration" ||
+            node.type === "FunctionExpression" ||
+            node.type === "ArrowFunctionExpression"
+        ) {
+            funcScopeIds.pop()
+        }
+    }})
+    replaceVarsAstObj(ast, replacements)
+    log("Removing duplicate constants")
 	const v = []
 	const r = []
 	const vd = []
@@ -1263,7 +1735,7 @@ function getRefCount(code, v){
 function generateHash(string){
 	return crypto.createHash('sha256').update(string).digest('hex');
 }
-{
+if (false){
 	log("Generating hash table for functions and classes")
 	const matches = [
 		/^(\t+)()function ([a-zA-Z0-9_\$]+)\(([a-zA-Z0-9_\$, ]+)\) \{[\s\S]+?\n\1\}/gm,
@@ -1307,7 +1779,7 @@ function generateHash(string){
 
 }
 if (!process.argv.includes("nonames"))returncode = setVarNames(false, returncode)
-returncode = finalCleanup(returncode)
+returncode = returnMaps(finalCleanup(returncode))
 {
 	log("Validating the code")
 	try{
