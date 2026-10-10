@@ -298,8 +298,8 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
         function getMainFunctionName(ast) {
             for (let node of ast.body) {
                 if (
-					node.type === "ExpressionStatement" && 
-					node.expression.type === "AssignmentExpression" && 
+					node.type === "ExpressionStatement" &&
+					node.expression.type === "AssignmentExpression" &&
 					node.expression.left.type === "MemberExpression" &&
 					node.expression.left.object.type === "Identifier"
 					) {
@@ -308,7 +308,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
             }
             return null
         }
-    
+
         function getMainArray(ast) {
             a: for (let node of ast.body) {
                 if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression") {
@@ -317,8 +317,8 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
                         if (node.expression.left.type === "Identifier") {
                             for (const element of right.elements) {
                                 if (!(
-                                    element.type === "CallExpression" && 
-                                    element.callee.type === "MemberExpression" && 
+                                    element.type === "CallExpression" &&
+                                    element.callee.type === "MemberExpression" &&
                                     element.callee.object.name === MAINFUNCTION &&
                                     element.arguments.length === 1 &&
                                     typeof element.arguments[0].value === "number"
@@ -337,7 +337,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
             }
             return null
         }
-    
+
         const MAINFUNCTION = getMainFunctionName(ast)
         if (MAINFUNCTION == null) {
             log("MAINFUNCTION not found, probably not obfuscated")
@@ -347,9 +347,6 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
         const MAINARRAY = getMainArray(ast)
 		let filteredObfCode = []
 		const funcsToFilter = [MAINFUNCTION]
-		function filterCode(node){
-			filteredObfCode.push(ast.body.splice(ast.body.indexOf(node), 1)[0])
-		}
 		let x = true
 		for (let i = 0; i < ast.body.length; i++) {
 			function filter(index, count = 1){
@@ -428,7 +425,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
 		}
         let scopeStack = []
         let globalScope = {}
-    
+
         function resolveVariable(name) {
             for (let i = scopeStack.length - 1; i >= 0; i--) {
                 const scope = scopeStack[i]
@@ -527,7 +524,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
             log("Math Operation not found")
             return
         }
-    
+
         // Get Math Operation Function Name
         const mathGetterFunctionNames = []
         const mathSetterFunctionNames = []
@@ -575,13 +572,13 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
                             let argsAllLiteral = true
                             const args = []
                             const argsValue = []
-    
+
                             for (const arg of node.arguments) {
                                 args.push(arg)
                                 if (arg.type !== "Literal") {
                                     argsAllLiteral = false
                                     if (
-                                        arg.type === "CallExpression" && 
+                                        arg.type === "CallExpression" &&
                                         arg.callee.type === "MemberExpression" &&
                                         mainFunctionNames.includes(arg.callee.object.name) &&
                                         mathSetterFunctionNames.includes(arg.callee.property.name)
@@ -592,7 +589,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
                                     argsValue.push(arg.value)
                                 }
                             }
-    
+
                             if (argsAllLiteral) {
                                 MAINFUNCTIONEVAL[mathSetterFunctionNames[0]](tmpMathSetterArg)
                                 const result = MAINFUNCTIONEVAL[mathGetterFunctionNames[0]](...argsValue)
@@ -647,7 +644,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
 					){
 					estraverse.traverse(node.expression.right.callee.body, {enter(node,parent){
 						if (
-							node.type === "CallExpression" && 
+							node.type === "CallExpression" &&
 							node.arguments.length === 1 &&
 							node.arguments[0].type === "Literal" &&
 							typeof node.arguments[0].value === "string" &&
@@ -741,8 +738,8 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
                     }
                 }
                 else if (
-                    node.type === "MemberExpression" && 
-                    (node.object.type === "Identifier" || node.object.type === "MemberExpression") && 
+                    node.type === "MemberExpression" &&
+                    (node.object.type === "Identifier" || node.object.type === "MemberExpression") &&
                     mainArrayNames.includes(getNodeValue(node.object))
                 ) {
                     if (node.property.type === "Literal") {
@@ -792,24 +789,25 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
                     if (test.type === "UnaryExpression" && test.operator === "!"){
                         test = test.argument
                     }
-					if (test.right && test.right.type === "UnaryExpression" && test.right.operator === "!") {
-						test.right = test.right.argument
-					}
+                    let testRight = test.right
+                    if (test.right && test.right.type === "UnaryExpression" && test.right.operator === "!") {
+                        testRight = test.right.argument
+                    }
                     if (
                         test.type === "LogicalExpression" && ((
-							test.right.type === "BinaryExpression" &&
-                        	test.right.left.type === "CallExpression" && 
-                        	test.right.left.callee.type === "MemberExpression" &&
-                        	mainFunctionNames.includes(test.right.left.callee.object.name) &&
-                        	test.right.left.arguments && 
-                        	test.right.left.arguments.length === 3 &&
-                        	test.right.left.arguments[0].value === 0 &&
-                        	test.right.left.arguments[1].value === false &&
-                        	typeof test.right.left.arguments[2].value === "number"
+						testRight.type === "BinaryExpression" &&
+						testRight.left.type === "CallExpression" &&
+						testRight.left.callee.type === "MemberExpression" &&
+						mainFunctionNames.includes(testRight.left.callee.object.name) &&
+						testRight.left.arguments &&
+						testRight.left.arguments.length === 3 &&
+						testRight.left.arguments[0].value === 0 &&
+						testRight.left.arguments[1].value === false &&
+						typeof testRight.left.arguments[2].value === "number"
 						) || (
-							test.right.type === "CallExpression" &&
-							test.right.callee.type === "MemberExpression" &&
-                        	mainFunctionNames.includes(test.right.callee.object.name)
+							testRight.type === "CallExpression" &&
+							testRight.callee.type === "MemberExpression" &&
+							mainFunctionNames.includes(testRight.callee.object.name)
 						))
                     ) {
                         const index = parent.body.indexOf(node)
@@ -821,10 +819,10 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
         })
         scopeStack = []
         globalScope = {}
-        // Remove MAINFUNCTION.abc(); 
+        // Remove MAINFUNCTION.abc();
 		estraverse.replace(ast, {enter(node,parent){
 			if (
-                node.type === "ExpressionStatement" && 
+                node.type === "ExpressionStatement" &&
                 node.expression.type === "CallExpression" &&
                 node.expression.callee.type === "MemberExpression" &&
                 mainFunctionNames.includes(node.expression.callee.object.name)
@@ -835,7 +833,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
             scopePush(node)
             if (
                 node.type === "ForStatement" &&
-                node.test.type === "BinaryExpression" && 
+                node.test.type === "BinaryExpression" &&
                 node.test.operator === "!==" &&
                 node.test.left.type === "CallExpression" &&
                 node.test.left.callee.type === "MemberExpression" &&
@@ -849,7 +847,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
 						ifs = parent.body[i]
 					}
                     if (
-                        MAINFUNCTIONEVAL[funcCall.callee.property.name]("1", 1, funcCall.arguments[2].value) !== 
+                        MAINFUNCTIONEVAL[funcCall.callee.property.name]("1", 1, funcCall.arguments[2].value) !==
                         resolveVariable(getNodeValue(node.test.right))
                         ){
                             const lastStatement = node.body.body[node.body.body.length-1]
@@ -857,7 +855,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
                             else resultAst = node.body.body
                         }
                     else if (
-						MAINFUNCTIONEVAL[funcCall.callee.property.name]("2", 1, ifs.test.left.arguments[2].value) !== 
+						MAINFUNCTIONEVAL[funcCall.callee.property.name]("2", 1, ifs.test.left.arguments[2].value) !==
 						resolveVariable(getNodeValue(ifs.test.right))
 						){
                         resultAst = ifs.consequent.body
@@ -868,7 +866,7 @@ if (process.argv.includes("nocache") || !fs.existsSync("cache/1.js")){
         // Generate updated code
         return fromAst(ast)
     }
-    returncode = removeMaps(initialDeobfuscation(response))
+    returncode = initialDeobfuscation(response)
     writeToFile("cache/1.js", returncode)
 }
 else{
@@ -1015,7 +1013,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 	    add(node)
 		shouldCount = true
 	    const oldScopeName = dec.id.name
-	    const indexTable = [] 
+	    const indexTable = []
 	    estraverse.traverse(blockNode, {enter(node, parent){
 	        if (node.type !== "MemberExpression") return
 	        if (!node.computed) return
@@ -1131,7 +1129,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 			scopeIdCount++
 			node.funcs = [...funcs]
 			scopes.push(node)
-		} 
+		}
 	}
 	function blockLeave(node, parent){
 		if (node.type.startsWith("For")){
@@ -1512,7 +1510,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 {
 	const r = {}
 	estraverse.traverse(ast, {enter(node,parent){
-		if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression" && node.expression.left.type === "Identifier" && 
+		if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression" && node.expression.left.type === "Identifier" &&
 		node.expression.right.type === "Identifier" && node.expression.left.name === node.expression.right.name) {
 			Object.assign(node, {
 				type: "VariableDeclaration",
@@ -1662,7 +1660,7 @@ log("Renumbering variables")
         }
         else if (
             (node.type === "VariableDeclarator" ||
-            node.type === "ClassDeclaration") 
+            node.type === "ClassDeclaration")
             && /^_f\d+(v\d+)?$/.test(node.id.name)
             ){
 			if (funcScopeIds.length === 0) return
@@ -1702,8 +1700,8 @@ log("Renumbering variables")
 	const rc = []
 	estraverse.traverse(ast, {enter(node, parent){
 		if (node.type === "Identifier" && (
-			parent.type === "UpdateExpression" || 
-			parent.type === "AssignmentExpression" || 
+			parent.type === "UpdateExpression" ||
+			parent.type === "AssignmentExpression" ||
 			(parent.type === "VariableDeclarator" && parent.init))){
 			const i = v.indexOf(node.name)
 			if (i === -1) return
