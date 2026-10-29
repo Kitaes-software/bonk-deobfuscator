@@ -106,11 +106,13 @@ function SkinManager() {
 Not only is it way more readable now, it's also considerably shorter!
 ## Command line arguments
 The command line arguments have to be used like this: `node bonkdeobf.js nominify`
-| Argument  | Description                         |
-|-----------|-------------------------------------|
-| nominify  | Do not minify the deobfuscated code |
-| noflags   | Do not remove the flag check in code|
-| namesonly | Only change the variable names      |
+| Argument    | Description                         |
+|-------------|-------------------------------------|
+| nominify    | Do not minify the deobfuscated code |
+| noflags     | Do not remove the flag check in code|
+| namesonly   | Only change the variable names      |
+| nonames     | Do not change the variable names    |
+| showvarusage| Shows usage of unnamed variables    |
 ## Size comparison
 Obfuscated code: 2636 KiB
 
