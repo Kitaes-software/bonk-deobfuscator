@@ -5,7 +5,6 @@ const esprima = require("esprima")
 const escodegen = require("escodegen")
 const estraverse = require("estraverse")
 const ini = require("ini")
-const crypto = require('crypto');
 let consoleText
 function init() {
     process.stdout.write("-- [Bonk Deobfuscator] --")
@@ -29,52 +28,7 @@ function log(text) {
 function changeStatus(status){
 	process.stdout.write(`\r${consoleText}: ${status}`)
 }
-function replaceVars(code, oldNames, newNames){
-	const tokens = esprima.tokenize(code)
-	code = ""
-	let isPrevTokenDot = false
-	for (const a of tokens){
-		if (a.type === "Keyword")  code += " "
-		if (a.type === "Identifier"){
-			const oldNameIndex = oldNames.indexOf(a.value)
-			if (!isPrevTokenDot && oldNameIndex !== -1){
-				code += newNames[oldNameIndex]
-				continue
-			}
-		}
-		code += a.value
-		if (a.type === "Keyword" || a.value === "static") code += " "
-		isPrevTokenDot = a.type === "Punctuator" && a.value === "."
-	}
-	return js_beautify(code, {e4x: true, indent_with_tabs: true})
-}
-function replaceVarsAst(ast, oldNames, newNames){
-	estraverse.replace(ast, {enter(node, parent){
-		if (node.type !== "Identifier") return
-		if (parent.type === "MemberExpression" && node.property === node) return
-		const index = oldNames.indexOf(node.name)
-		if (index !== -1) node.name = newNames[index]
-	}})
-}
-function replaceVarsObj(code, replacements){
-	const tokens = esprima.tokenize(code)
-	code = ""
-	let isPrevTokenDot = false
-	for (const a of tokens){
-		if (a.type === "Keyword")  code += " "
-		if (a.type === "Identifier"){
-			if (!isPrevTokenDot && typeof replacements[a.value] === "string"){
-				code += replacements[a.value]
-				continue
-			}
-		}
-		code += a.value
-		if (a.type === "Keyword" || a.value === "static") code += " "
-		isPrevTokenDot = a.type === "Punctuator" && a.value === "."
-	}
-	return js_beautify(code, {e4x: true, indent_with_tabs: true})
-}
-function replaceVarsAstObj(ast, replacements){
+function replaceVars(ast, replacements){
 	estraverse.replace(ast, {enter(node, parent){
 		if (node.type !== "Identifier") return
 		if (parent.type === "MemberExpression" && node.property === node) return
@@ -119,8 +73,8 @@ function setVarNames(thisOnly, code){
 		}
 	}
     log("Renamed variables: " + Object.keys(replacements).length)
-    code = replaceVarsObj(code, replacements)
-	const ast = esprima.parseScript(code)
+    const ast = esprima.parseScript(code)
+	replaceVars(ast, replacements)
 	const vl = []
 	estraverse.replace(ast, {enter(node, parent){
 		if (node.type === "Identifier"){
@@ -176,7 +130,7 @@ function setVarNames(thisOnly, code){
 			log(l[i] + ": " + counts[l[i]])
 		}
 	}
-	code = fromAst(ast).replaceAll("let ZZZ;", "").replaceAll("const ZZZ;", "")
+	code = fromAst(ast)
 	r = true
 	return code
 }
@@ -215,9 +169,6 @@ version = [...response.matchAll(/news:/g)].length
 log("Bonk version: " + version)
 log("Deobfuscation started")
 const t = Date.now()
-function noDuplicate(array) {
-	return [...new Set(array)]
-}
 function escapeRegExp(string) {
 	return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
@@ -841,48 +792,25 @@ log("Cleanup")
 returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 {
 	log("Unpacking arrays")
-	function makeSafe(code){
-		const tokens = esprima.tokenize(code)
-		code = ""
-		let isPrevTokenDot = false
-		for (const a of tokens){
-			if (a.type === "Keyword") code += " "
-			if (a.type === "Identifier" && !isPrevTokenDot){
-				if (a.value.startsWith("f") && !isNaN(parseInt(a.value[1]))) {
-					code += "_" + a.value
-					continue
-				}
-			}
-			code += a.value
-			if (a.type === "Keyword" || a.value === "static") code += " "
-			isPrevTokenDot = a.type === "Punctuator" && a.value === "."
-		}
-		return code
-	}
     function makeSafeAst(ast){
 		estraverse.replace(ast, {enter(node, parent){
             if (node.type === "Identifier" && !(parent.type === "MemberExpression" && parent.property === node && !parent.computed)){
-                if (node.name.startsWith("f")  && !isNaN(parseInt(node.name[1])))node.name = "_" + node.name
+                if (node.name.startsWith("f")  && !isNaN(parseInt(node.name[1]))) node.name = "_" + node.name
             }
         }})
 	}
-	returncode = makeSafe(returncode)
-	const ast = esprima.parseScript(returncode)
+    const ast = esprima.parseScript(returncode)
+	makeSafeAst(ast)
 {
 	let newScopeCounter = 0
 	let unobfuscatedIndex = 0
-	let hasFuncName = false
 	let shouldCount = false
 	let esc = 0
-	let af = 0
-	const oldNames = []
-	const newNames = []
+	const replacements = {}
 	function add(node, a){
 		if (!(node.id && node.id.name)) return
 		hasFuncName = true
-		oldNames.push(node.id.name)
-		node.id.name = a ? ("ef" + esc) : ("f" + newScopeCounter)
-		newNames.push(node.id.name)
+		replacements[node.id.name] = (node.id.name = a ? ("ef" + esc) : ("f" + newScopeCounter))
 		return true
 	}
 	const vl = []
@@ -893,10 +821,8 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		for (let i = 0; i < node.params.length; i++){
 			let param = node.params[i]
 			if (param.type === "RestElement") param = param.argument
-			else if (param.type === "AssignmentPattern") param = param.left
-			oldNames.push(param.name)
-			param.name = "f" + newScopeCounter + "a" + i
-			newNames.push(param.name)
+            else if (param.type === "AssignmentPattern") param = param.left
+			replacements[param.name] = (param.name = "f" + newScopeCounter + "a" + i)
 		}
 	}
 	estraverse.replace(ast, {enter(node, parent){
@@ -905,14 +831,9 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 			if (ast.body.indexOf(parent) !== -1) return
 			// looks like the obfuscation failed there for some unknown reason, it mostly happens in render func
 			if (xd.includes(node.id.name)) return
-			xd.push(node.id.name)
-			oldNames.push(node.id.name)
-			node.id.name = "f" + newScopeCounter + "v" + unobfuscatedIndex
-			newNames.push(node.id.name)
-			unobfuscatedIndex++
-			if (!shouldCount){
-				renameArgs(cn)
-			}
+            xd.push(node.id.name)
+			replacements[node.id.name] = (node.id.name = "f" + newScopeCounter + "v" + unobfuscatedIndex++)
+			if (!shouldCount) renameArgs(cn)
 			shouldCount = true
 			return
 		}
@@ -986,7 +907,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		newScopeCounter++
 		unobfuscatedIndex = 0
 	}})
-	replaceVarsAst(ast, oldNames, newNames)
+	replaceVars(ast, replacements)
 	estraverse.replace(ast, {enter(node, parent){
 		if (!(node.type === "VariableDeclaration" && !parent.type.startsWith("For"))) return
 		for (let i = 0; i < node.declarations.length; i++) {
@@ -1333,7 +1254,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		Object.assign(parent, obj)
 	},
 	leave: blockLeave})
-	replaceVarsAstObj(ast, reps)
+	replaceVars(ast, reps)
 	// STAGE 5: put remaining variables at the start of a block
 	const remainingVarList = Object.keys(vars)
 	const vd = []
@@ -1389,7 +1310,7 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		l.push(nn)
 		r[node.id.name] = nn
 	}})
-	replaceVarsAstObj(ast, r)
+	replaceVars(ast, r)
 }
 	log("Removing unused arguments")
 {
@@ -1445,9 +1366,9 @@ returncode = js_beautify(returncode, {e4x: true, indent_with_tabs: true})
 		    this.remove()
 		}
 	}})
-	replaceVarsAstObj(ast, r)
+	replaceVars(ast, r)
 }
-	returncode = fromAst(ast).replaceAll(/(let|var|const) ZZZ;/g, "")
+	returncode = fromAst(ast)
 }
 log('Replacing "(1, abc)()" with "abc()"') // shits useless unless it's eval
 returncode = returncode.replaceAll(/\(1, ([a-zA-Z0-9_\$]+)\)\(/g, "$1(")
@@ -1456,7 +1377,7 @@ if (!process.argv.includes("noflags")){ try{
 	const varName = ((returncode.match(/^\t+[a-zA-Z0-9_\$]+\.europeanunion = true;/gm)[0]).split(".")[0]).trim()
 	returncode = returncode.replace(`let${varName} = {}`, "")
 	returncode = returncode.replaceAll(new RegExp(`${escapeRegExp(varName)}\\..+`, "g"), "")
-	returncode = returncode.replace(new RegExp(`if \\(${escapeRegExp(varName)}.+`), "if (true) {")
+	returncode = returncode.replace(new RegExp(`if \\(${escapeRegExp(varName)}.+`), "{")
 } catch(e){
 	log("Nation check not found")
 }}
@@ -1498,61 +1419,98 @@ try{
 	returncode = returncode.replace(`const ${varName} = [];`, `const ${varName} = [${list.join(", ")}];`)
 } catch(e){changeStatus("Not found")}
 {
-	log("Removing functions that do nothing")
-	returncode = returncode.replaceAll(/\.(fail|done)\(function\(.*\) \{\s*\}\)/g, "")
-	returncode = returncode.replaceAll(/\.(fail|done)\(\(.*\) => \{\s*\}\)/g, "")
-	returncode = returncode.replaceAll(/\.fail\(function\(.+\) \{\s*throw new Error.+\s*\}\)/g, "")
-	returncode = returncode.replaceAll(/\(?[a-zA-Z0-9_\$]*\)? => \{\s*([a-zA-Z0-9_\$]+)\(\)\s*\}/g, "$1")
-	returncode = returncode.replaceAll(/[a-zA-Z0-9_\$]+\.on\([a-zA-Z0-9_\$"']+,.*\{\}\);/g, "")
-	returncode = returncode.replaceAll(/\(?([a-zA-Z0-9_\$, ]+)\)? => \{[\s\n]+([a-zA-Z0-9_\$]+)\(\1\);?[\s\n]+\}/g, "$2")
-}
-{
-	log('Replacing "if (abc) {} else {doSomething()}" with "if (!abc) {doSomething()}"')
-	returncode = returncode.replaceAll(/if \(.+\) {\s*}\s*else {\s*}/g, "")
-	returncode = returncode.replaceAll(/if \((.+)\) {\s*}\s*else {(.+)}/g, "if (!($1)) {$2}")
-}
-{
-	log('Replacing "catch (abc) {" with "catch (err) {')
-	returncode = returncode.replaceAll(/catch \([a-zA-Z0-9_\$]+\)/g, "catch (err)")
-}
-{
-	log("Removing useless code") // could become problematic in the future
-	returncode = returncode.replace(/[a-zA-Z0-9_\$]+\.keyUpFunctions[\s\S]+\};\s+moment/, "moment")
-}
-{
-	log("Replacing \"const abc = class def\" with \"class abc\"")
-	const matches = [...returncode.matchAll(/const ([a-zA-Z0-9_\$\[\]]+) = class ([a-zA-Z0-9_\$]+)/g)]
-	returncode = returncode.replaceAll(/const ([a-zA-Z0-9_\$\[\]]+) = class [a-zA-Z0-9_\$]+/g, "class $1")
-	const o = []
-	const n = []
-	for (const a of matches){
-		o.push(a[2])
-		n.push(a[1])
-	}
-	returncode = replaceVars(returncode, o, n)
-}
-function getRefCount(code, v){
-	const result = []
-	for (let i = 0; i < v.length; i++){
-		result[i] = 0
-	}
-	const tokens = esprima.tokenize(code)
-	let isPrevTokenDot = false
-	for (const a of tokens){
-		if (a.type === "Identifier"){
-			const index = v.indexOf(a.value)
-			if (!isPrevTokenDot && index !== -1){
-				result[index]++
-				continue
-			}
-		}
-		isPrevTokenDot = a.type === "Punctuator" && a.value === "."
-	}
-	return result
-}
-log("Renumbering variables")
-{
+    log("Removing functions that do nothing")
     const ast = esprima.parseScript(returncode)
+    const repl = {}
+    estraverse.replace(ast, {
+        enter(node) {
+            if (node.type === 'CallExpression') {
+                const callee = node.callee;
+                const args = node.arguments;
+                if (callee.type !== 'MemberExpression' || callee.property.type !== 'Identifier') return
+                const propName = callee.property.name;
+                if (propName === 'fail' || propName === 'done') {
+                    if (args.length === 1 && (args[0].type === 'FunctionExpression' || args[0].type === 'ArrowFunctionExpression')) {
+                        const body = args[0].body;
+                        if (body.type === 'BlockStatement' && body.body.length === 0)
+                            return callee.object;
+                    }
+                }
+                if (propName === 'fail' && args.length === 1 && args[0].type === 'FunctionExpression') {
+                    const body = args[0].body;
+                    if (body.type === 'BlockStatement' && body.body.length === 1) {
+                        const firstStmt = body.body[0];
+                        if (firstStmt.type === 'ThrowStatement' && firstStmt.argument.type === 'NewExpression') {
+                            if (firstStmt.argument.callee.type === 'Identifier' && firstStmt.argument.callee.name === 'Error') {
+                                return callee.object;
+                            }
+                        }
+                    }
+                }
+            }
+            else if (node.type === 'ExpressionStatement' && node.expression.type === 'CallExpression') {
+              const callee = node.expression.callee;
+              const args = node.expression.arguments;
+              if (callee.type === 'MemberExpression' && callee.property.type === 'Identifier' && callee.property.name === 'on') {
+                if (args.length === 2 && (args[1].type === 'FunctionExpression' || args[1].type === 'ArrowFunctionExpression')) {
+                  const body = args[1].body;
+                  if (body.type === 'BlockStatement' && body.body.length === 0) {
+                    return this.remove();
+                  }
+                }
+              }
+            }
+            else if (node.type === 'ArrowFunctionExpression') {
+                const params = node.params;
+                const body = node.body;
+                if (body.type === 'BlockStatement' && body.body.length === 1) {
+                    const stmt = body.body[0];
+                    if (stmt.type === 'ExpressionStatement' && stmt.expression.type === 'CallExpression') {
+                        const callExpr = stmt.expression;
+                        if (callExpr.callee.type === 'Identifier') {
+                            if (params.length !== callExpr.arguments.length) return
+                            for (let i = 0; i < params.length; i++){
+                                const param = params[i]
+                                const arg = callExpr.arguments[i];
+                                if (param.type === 'Identifier' && arg.type === 'Identifier' && param.name === arg.name) return callExpr.callee
+                            }
+                        }
+                    }
+                }
+            }
+            else if (node.type === "IfStatement" && node.alternate && node.consequent.type === "BlockStatement" && node.consequent.body.length === 0){
+                node.consequent = node.alternate
+                if (node.test.type === "UnaryExpression" && node.test.operator === "!") {
+                    node.test = node.test.argument
+                }
+                else {
+                    node.test = {
+                        type: "UnaryExpression",
+                        operator: "!",
+                        argument: node.test,
+                        prefix: true
+                    }
+                }
+                delete node.alternate
+            }
+            else if (node.type === "CatchClause") node.param.name === "err"
+            else if (node.type === "VariableDeclaration" && node.kind === "const" && node.declarations.length === 1) {
+                const dec = node.declarations[0]
+                if (dec.init.type === "ClassExpression") {
+                    dec.init.type = "ClassDeclaration"
+                    if (dec.init.id) repl[dec.init.id.name] = dec.id.name
+                    dec.init.id = dec.id
+                    return dec.init
+                }
+            }
+        }
+    });
+    replaceVars(ast, repl)
+// {
+// 	log("Removing useless code") // could become problematic in the future
+// 	returncode = returncode.replace(/[a-zA-Z0-9_\$]+\.keyUpFunctions[\s\S]+\};\s+moment/, "moment")
+// }
+    log("Renumbering variables")
     makeSafeAst(ast)
     const replacements = {}
     let functionCounter = -1
@@ -1604,63 +1562,25 @@ log("Renumbering variables")
             funcScopeIds.pop()
         }
     }})
-    replaceVarsAstObj(ast, replacements)
+    replaceVars(ast, replacements)
     log("Removing duplicate constants")
-	const v = []
-	const r = []
-	const vd = []
+    const repl2 = {}
 	estraverse.replace(ast, {enter(node, parent){
 		if (node.type !== "VariableDeclaration") return
-		if (parent.type.startsWith("For")) return
+		if (parent.type.startsWith("For") || node.kind !== "const") return
 		for (let i = 0; i < node.declarations.length; i++){
 			const d = node.declarations[i]
 			if (d.init && d.init.type === "Literal"){
-				if (d.id.name.length === 1) return
-				v.push(d.id.name)
-				r.push(d.init.raw)
-				vd.push([node.declarations, i])
+                if (d.id.name.length === 1) return
+                this.remove()
+				repl2[d.id.name] = d.init.raw
 			}
 		}
 		if (node.declarations.length === 0) this.remove()
-	}})
-	const rc = []
-	estraverse.replace(ast, {enter(node, parent){
-		if (node.type === "Identifier" && (
-			parent.type === "UpdateExpression" ||
-			parent.type === "AssignmentExpression" ||
-			(parent.type === "VariableDeclarator" && parent.init))){
-			const i = v.indexOf(node.name)
-			if (i === -1) return
-			if (!rc[i]) {
-				rc[i] = 0
-			}
-			rc[i]++
-		}
-	}})
-	const nv = []
-	const nr = []
-	const nvd = []
-	for (let i = 0; i < rc.length; i++){
-		if (rc[i] === 1){
-			nv.push(v[i])
-			nr.push(r[i])
-			nvd.push(vd[i])
-		}
     }
-	let io = 0
-	for (const a of nvd){
-		a[0].splice(a[1]-io,1)
-		if (a[0].length === 0) a[0][0] = {
-			type: "VariableDeclarator",
-			id: {
-				type: "Identifier",
-				name: "ZZZ"
-			}
-		}
-		io++
-	}
+    })
+	replaceVars(ast, repl2)
     returncode = fromAst(ast)
-	returncode = replaceVars(returncode, nv, nr).replaceAll(/^(\t+)('.*?'|-?\d+) = (.+)/gm, "$1$3").replaceAll(/\t+let (\S+) = \1;\n/g, "").replaceAll(/\t+(let|const) ZZZ;\n/g, "")
 }
 if (!process.argv.includes("nonames")) returncode = setVarNames(false, returncode)
 returncode = finalCleanup(returncode)
