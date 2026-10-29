@@ -796,23 +796,25 @@ async function main() {
 	}
 	function removeDeadCode() {
 		log("Removing dead code")
-		const entries = [...returncode.matchAll(/^(\t*)function [a-zA-Z0-9_\$]+\([a-zA-Z0-9_\$, ]*\) \{\n/gm)]
-		let deadCode = []
-		for (const a of entries) {
-			const length = a[1].length + 1
-			const split = ((returncode.match(new RegExp(`${escapeRegExp(a[0])}([\\S\\s]+?)\\n${a[1]}\\}`)))[1]).split("\n")
-			for (let i = 0; i < split.length; i++) {
-				const line = split[i]
-				const trimmedLine = line.slice(length)
-				if (trimmedLine.startsWith("return;") && i < split.length - 1) {
-					deadCode.push(split.slice(i).join("\n"))
+		let deadCodeCount = 0
+		estraverse.replace(ast, {
+			enter(node, parent) {
+				if (node.type === "FunctionDeclaration" && node.body.type === "BlockStatement") {
+					const block = node.body.body
+					for (let i = 0; i < block.length; i++){
+						const funcNode = block[i]
+						if (funcNode.type === "ReturnStatement") {
+							if (i < block.length - 1) {
+								deadCodeCount++
+								node.body.body = block.slice(0, funcNode.argument ? i + 1 : i)
+								break
+							}
+						}
+					}
 				}
 			}
-		}
-		for (const a of deadCode) {
-			returncode = returncode.replace(a, "")
-		}
-		changeStatus(deadCode.length + " sections found")
+		})
+		changeStatus(deadCodeCount + " sections found")
 	}
 	function unpackArrays(){
 		log("Unpacking arrays")
@@ -1624,9 +1626,7 @@ async function main() {
 		returncode = fromAst(ast)
 	}
 	initialDeobfuscation()
-	returncode = fromAst(ast)
 	removeDeadCode()
-	ast = esprima.parseScript(returncode)
 	makeSafe(ast)
 	unpackArrays()
 	removeUnusedFunctions()
