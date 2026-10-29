@@ -113,6 +113,7 @@ The command line arguments have to be used like this: `node bonkdeobf.js nominif
 | namesonly   | Only change the variable names      |
 | nonames     | Do not change the variable names    |
 | showvarusage| Shows usage of unnamed variables    |
+| fetch       | Fetch the code from the server      |
 ## Size comparison
 Obfuscated code: 2636 KiB
 
