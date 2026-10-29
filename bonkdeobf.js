@@ -67,13 +67,12 @@ function test(code) {
 }
 let r = false
 let version
-function setVarNames(code, thisOnly = false) {
+function setVarNames(ast, thisOnly = false) {
 	log("Setting variable names")
 	const data = ini.decode(fs.readFileSync("variableNames.ini", { encoding: "ascii" }))
 	if (data.version != version) {
 		log(`Error: version mismatch. Variable names version: ${data.version}, Bonk version: ${version}`)
 		if (thisOnly) process.exit(0)
-		else return code
 	}
 	const replacements = {}
 	for (const fName of Object.keys(data.f)) {
@@ -93,7 +92,6 @@ function setVarNames(code, thisOnly = false) {
 		}
 	}
 	log("Renamed variables: " + Object.keys(replacements).length)
-	const ast = esprima.parseScript(code)
 	replaceVars(ast, replacements)
 	const vl = []
 	estraverse.replace(ast, {
@@ -152,9 +150,7 @@ function setVarNames(code, thisOnly = false) {
 			log(l[i] + ": " + counts[l[i]])
 		}
 	}
-	code = fromAst(ast)
 	r = true
-	return code
 }
 function finalCleanup(code) {
 	log("Final cleanup")
@@ -200,7 +196,9 @@ function minifyCode(code) {
 async function main() {
 	const response = await init(options.fetch)
 	if (options.namesOnly) {
-		let code = finalCleanup(setVarNames(response, true))
+		const ast = esprima.parseScript(response)
+		setVarNames(ast)
+		let code = finalCleanup(setVarNames(fromAst(ast), true))
 		const filename = "deobfuscated/alpha2s.js"
 		log("Saving deobfuscated code to " + filename)
 		writeToFile(filename, code)
@@ -1647,7 +1645,8 @@ async function main() {
 	// 	returncode = returncode.replace(/[a-zA-Z0-9_\$]+\.keyUpFunctions[\s\S]+\};\s+moment/, "moment")
 	// }
 	renumberVariables()
-	if (!options.noNames) returncode = setVarNames(returncode)
+	if (!options.noNames) setVarNames(ast)
+	returncode = fromAst(ast)
 	returncode = finalCleanup(returncode)
 	validateCode(returncode)
 	saveCode("deobfuscated/alpha2s.js", returncode)
