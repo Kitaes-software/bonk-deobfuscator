@@ -158,15 +158,7 @@ function finalCleanup(code) {
 		code = (minify(code, { compress: false, mangle: false })).code
 	}
 	code = js_beautify(code, { indent_with_tabs: true })
-	const found = code.slice(0, 10).indexOf("requirejs") !== -1
-	const tmp = code.split("\n")
-	for (const i in tmp) {
-		if (tmp[i].startsWith("\t") && found) tmp[i] = tmp[i].slice(1)
-		if (tmp[i].startsWith(" ")) tmp[i] = tmp[i].slice(1)
-		if (tmp[i].trim()) tmp[i] += "\n"
-	}
-	code = tmp.join("")
-	return code
+	if (code.slice(0, 9) === "requirejs") return code.replaceAll("\n\t", "\n")
 }
 function validateCode(code) {
 	log("Validating the code")
@@ -1632,13 +1624,6 @@ async function main() {
 	renameHTMLVariables()
 	removeUnusedArgs()
 	removeCyclicDeclarations()
-	returncode = fromAst(ast)
-	deAnonymizeFunctions()
-	if (!options.noFlags) removeFlagCheck()
-	flattenColors()
-	flattenNews()
-	flattenLayerArray()
-	ast = esprima.parseScript(returncode)
 	removeEmptyFunctions()
 	// {
 	// 	log("Removing useless code") // could become problematic in the future
@@ -1647,6 +1632,11 @@ async function main() {
 	renumberVariables()
 	if (!options.noNames) setVarNames(ast)
 	returncode = fromAst(ast)
+	deAnonymizeFunctions()
+	if (!options.noFlags) removeFlagCheck()
+	flattenColors()
+	flattenNews()
+	flattenLayerArray()
 	returncode = finalCleanup(returncode)
 	validateCode(returncode)
 	saveCode("deobfuscated/alpha2s.js", returncode)
