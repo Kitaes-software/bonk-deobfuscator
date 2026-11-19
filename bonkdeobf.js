@@ -1,6 +1,5 @@
 const fs = require("fs")
 const minify = require("oxc-minify").minifySync
-const estraverse = require("estraverse")
 const meriyah = require("meriyah")
 const astring = require("astring")
 const ini = require("ini")
@@ -50,7 +49,7 @@ function changeStatus(status) {
 	process.stdout.write(`\r${consoleText}: ${status}`)
 }
 function replaceVars(ast, replacements) {
-	estraverse.replace(ast, {
+	traverse(ast, {
 		enter(node, parent) {
 			if (node.type !== "Identifier") return
 			if (parent.type === "MemberExpression" && node.property === node) return
@@ -96,7 +95,7 @@ function setVarNames(ast, thisOnly = false) {
 	log("Renamed variables: " + Object.keys(replacements).length)
 	replaceVars(ast, replacements)
 	const vl = []
-	estraverse.replace(ast, {
+	traverse(ast, {
 		enter(node, parent) {
 			if (node.type === "Identifier") {
 				vl.push(node.name)
@@ -183,6 +182,158 @@ function minifyCode(code) {
 	log("Saving minified code to " + filename)
 	writeToFile(filename, returncode)
 }
+const nodeKeys = new Map([
+	['AssignmentExpression', ['left', 'right']],
+	['AssignmentPattern', ['left', 'right']],
+	['ArrayExpression', ['elements']],
+	['ArrayPattern', ['elements']],
+	['ArrowFunctionExpression', ['params', 'body']],
+	['AwaitExpression', ['argument']],
+	['BlockStatement', ['body']],
+	['BinaryExpression', ['left', 'right']],
+	['BreakStatement', ['label']],
+	['CallExpression', ['callee', 'arguments']],
+	['CatchClause', ['param', 'body']],
+	['ChainExpression', ['expression']],
+	['ClassBody', ['body']],
+	['ClassDeclaration', ['id', 'superClass', 'body']],
+	['ClassExpression', ['id', 'superClass', 'body']],
+	['ConditionalExpression', ['test', 'consequent', 'alternate']],
+	['ContinueStatement', ['label']],
+	['DebuggerStatement', []],
+	['DoWhileStatement', ['body', 'test']],
+	['EmptyStatement', []],
+	['ExportAllDeclaration', ['source', 'exported']],
+	['ExportDefaultDeclaration', ['declaration']],
+	['ExportNamedDeclaration', ['declaration', 'specifiers', 'source']],
+	['ExportSpecifier', ['exported', 'local']],
+	['ExpressionStatement', ['expression']],
+	['ForStatement', ['init', 'test', 'update', 'body']],
+	['ForInStatement', ['left', 'right', 'body']],
+	['ForOfStatement', ['left', 'right', 'body']],
+	['FunctionDeclaration', ['id', 'params', 'body']],
+	['FunctionExpression', ['id', 'params', 'body']],
+	['Identifier', []],
+	['IfStatement', ['test', 'consequent', 'alternate']],
+	['ImportDeclaration', ['specifiers', 'source']],
+	['ImportDefaultSpecifier', ['local']],
+	['ImportExpression', ['source']],
+	['ImportNamespaceSpecifier', ['local']],
+	['ImportSpecifier', ['imported', 'local']],
+	['LabeledStatement', ['label', 'body']],
+	['Literal', []],
+	['LogicalExpression', ['left', 'right']],
+	['MemberExpression', ['object', 'property']],
+	['MetaProperty', ['meta', 'property']],
+	['MethodDefinition', ['key', 'value']],
+	['NewExpression', ['callee', 'arguments']],
+	['ObjectExpression', ['properties']],
+	['ObjectPattern', ['properties']],
+	['PrivateIdentifier', []],
+	['Program', ['body']],
+	['Property', ['key', 'value']],
+	['PropertyDefinition', ['key', 'value']],
+	['RestElement', ['argument']],
+	['ReturnStatement', ['argument']],
+	['SequenceExpression', ['expressions']],
+	['SpreadElement', ['argument']],
+	['StaticBlock', ['body']],
+	['Super', []],
+	['SwitchStatement', ['discriminant', 'cases']],
+	['SwitchCase', ['test', 'consequent']],
+	['TaggedTemplateExpression', ['tag', 'quasi']],
+	['TemplateElement', []],
+	['TemplateLiteral', ['quasis', 'expressions']],
+	['ThisExpression', []],
+	['ThrowStatement', ['argument']],
+	['TryStatement', ['block', 'handler', 'finalizer']],
+	['UnaryExpression', ['argument']],
+	['UpdateExpression', ['argument']],
+	['VariableDeclaration', ['declarations']],
+	['VariableDeclarator', ['id', 'init']],
+	['WhileStatement', ['test', 'body']],
+	['WithStatement', ['object', 'body']],
+	['YieldExpression', ['argument']],
+]);
+function traverse(root, visitor) {
+	const enter = visitor.enter;
+	const leave = visitor.leave;
+	let broken = false;
+	let skipped = false;
+	let removed = false;
+	const controller = {
+		skip() { skipped = true },
+		break() { broken = true },
+		remove() { removed = true },
+	};
+	const stack = [{ node: root, parent: null, prop: 'root', index: null, phase: false, target: null }];
+	while (stack.length && !broken) {
+		const frame = stack[stack.length - 1];
+		if (!frame.phase) {
+		frame.phase = true;
+		const originalNode = frame.node;
+		let currentNode = originalNode;
+		skipped = false;
+		removed = false;
+		if (enter) {
+			const res = enter.call(controller, originalNode, frame.parent);
+			if (res && res.type) {
+				currentNode = res;
+				if (frame.index !== null) {
+					if (frame.target[frame.index] === originalNode) {
+						frame.target[frame.index] = currentNode;
+					} else {
+						const idx = frame.target.indexOf(originalNode);
+						if (idx !== -1) frame.target[idx] = currentNode;
+					}
+				} else frame.target[frame.prop] = currentNode;
+			}
+		}
+		if (broken) break;
+		else if (removed) {
+			frame.removed = true;
+			continue;
+		}
+		else if (skipped) continue;
+	
+		const keys = nodeKeys.get(currentNode.type);
+		if (!keys) throw new Error('Unknown node: ' + currentNode.type);
+	
+		for (let k = keys.length - 1; k >= 0; k--) {
+			const key = keys[k];
+			const child = currentNode[key];
+			if (child === null || typeof child !== 'object') continue;
+			if (Array.isArray(child)) {
+			for (let i = child.length - 1; i >= 0; i--) {
+				const el = child[i];
+				if (el && el.type)
+				stack.push({ node: el, parent: currentNode, prop: key, index: i, phase: false, target: child });
+			}
+			} else if (child.type)
+			stack.push({ node: child, parent: currentNode, prop: key, index: null, phase: false, target: currentNode });
+		}
+	} else {
+		stack.pop();
+		const originalNode = frame.node;
+		removed = Boolean(frame.removed);
+		if (leave) {
+			const res = leave.call(controller, originalNode, frame.parent);
+			if (res && res.type) {
+				if (frame.index !== null) {
+					const idx = frame.target[frame.index] === originalNode ? frame.index : frame.target.indexOf(originalNode);
+					if (idx !== -1) frame.target[idx] = res;
+				} else frame.target[frame.prop] = res;
+			}
+			}
+			if (removed) {
+				if (frame.index !== null) {
+					const idx = frame.target[frame.index] === originalNode ? frame.index : frame.target.indexOf(originalNode);
+					if (idx !== -1) frame.target.splice(idx, 1);
+				} else frame.target[frame.prop] = null;
+			}
+		}
+	}
+}
 async function main() {
 	const response = await init(options.fetch)
 	if (options.namesOnly) {
@@ -203,7 +354,7 @@ async function main() {
 		return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 	}
 	function makeSafe(ast) {
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (node.type === "Identifier" && !(parent.type === "MemberExpression" && parent.property === node && !parent.computed)) {
 					if (node.name.startsWith("f") && !isNaN(parseInt(node.name[1]))) node.name = "_" + node.name
@@ -384,7 +535,7 @@ async function main() {
 			}
 		}
 		// Finding alternative names
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node) {
 				if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression") {
 					const ex = node.expression
@@ -418,7 +569,7 @@ async function main() {
 		})
 		// Get Math Operation Property Name
 		let mathGetterPropertyName, mathSetterPropertyName, mathSwitch
-		estraverse.replace(filteredObfCode, {
+		traverse(filteredObfCode, {
 			enter(node) {
 				if (node.type === "ObjectExpression" && node.properties.length === 2) {
 					const firstNode = node.properties[0]
@@ -471,7 +622,7 @@ async function main() {
 		// FROM: mathSetterFunctionNames(0); var a = mathGetterFunctionNames(1, 2); var b = mathGetterFunctionNames(variable1, 1)
 		// TO: var a = 1; var b = 1 - variable1
 		let tmpMathSetterArg
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node) {
 				if (node.type === "CallExpression") {
 					if (
@@ -525,7 +676,7 @@ async function main() {
 								for (const switchCase of mathSwitch.cases) {
 									if (switchCase.test.value === tmpMathSetterArg) {
 										let BinaryExpression = structuredClone(switchCase.consequent[0].expression.right)
-										estraverse.replace(BinaryExpression, {
+										traverse(BinaryExpression, {
 											enter(node) {
 												if (node.type === "MemberExpression") {
 													Object.assign(node, args[node.property.value])
@@ -554,7 +705,7 @@ async function main() {
 					node.expression.right.callee.type === "FunctionExpression" &&
 					node.expression.right.callee.body.type === "BlockStatement"
 				) {
-					estraverse.replace(node.expression.right.callee.body, {
+					traverse(node.expression.right.callee.body, {
 						enter(node, parent) {
 							if (
 								node.type === "CallExpression" &&
@@ -613,7 +764,7 @@ async function main() {
 				raw: typeof res === "string" ? JSON.stringify(res) : String(res)
 			}
 		}
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				scopePush(node)
 				if (node.type === "CallExpression") {
@@ -734,7 +885,7 @@ async function main() {
 		scopeStack = []
 		globalScope = {}
 		// Remove MAINFUNCTION.abc();
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (
 					node.type === "ExpressionStatement" &&
@@ -745,7 +896,7 @@ async function main() {
 			}
 		})
 		// Remove code traps
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				scopePush(node)
 				if (
@@ -784,7 +935,7 @@ async function main() {
 	function removeDeadCode() {
 		log("Removing dead code")
 		let deadCodeCount = 0
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (node.type === "FunctionDeclaration" && node.body.type === "BlockStatement") {
 					const block = node.body.body
@@ -828,7 +979,7 @@ async function main() {
 				replacements[param.name] = (param.name = "f" + newScopeCounter + "a" + i)
 			}
 		}
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (node.type === "VariableDeclarator" && !(node.init && node.init.elements && node.init.elements[0].name === "arguments") && !parent.unmarked) {
 					// global scope exists for some reason, do not touch it
@@ -873,7 +1024,7 @@ async function main() {
 				shouldCount = true
 				const oldScopeName = dec.id.name
 				const indexTable = []
-				estraverse.replace(blockNode, {
+				traverse(blockNode, {
 					enter(node, parent) {
 						if (node.type !== "MemberExpression") return
 						if (!node.computed) return
@@ -915,7 +1066,7 @@ async function main() {
 			}
 		})
 		replaceVars(ast, replacements)
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (!(node.type === "VariableDeclaration" && !parent.type.startsWith("For"))) return
 				for (let i = 0; i < node.declarations.length; i++) {
@@ -937,7 +1088,7 @@ async function main() {
 			unc = 0
 			const funcs = {}
 			const emptyFuncs = []
-			estraverse.replace(ast, {
+			traverse(ast, {
 				enter(node, parent) {
 					if (node.type === "FunctionDeclaration" && node.id.name && parent !== ast) {
 						funcs[node.id.name] = { node: node, parent: parent, used: false }
@@ -947,7 +1098,7 @@ async function main() {
 					}
 				}
 			})
-			estraverse.replace(ast, {
+			traverse(ast, {
 				enter(node, parent) {
 					if (node.type === "Identifier" && parent.type !== "FunctionDeclaration") {
 						if (funcs[node.name]) funcs[node.name].used = true
@@ -1014,7 +1165,7 @@ async function main() {
 		function checkForFuncCall(node) {
 			if (!node) return true
 			if (node.type.endsWith("FunctionExpression")) return false
-			estraverse.replace(node, {
+			traverse(node, {
 				enter(node) {
 					if (node.type === "CallExpression" || node.type === "NewExpression") return true
 				}
@@ -1022,7 +1173,7 @@ async function main() {
 			return false
 		}
 		// STAGE 1: get all variables and remove all declarations
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				blockEnter(node, parent)
 				if (node.type !== "VariableDeclaration") return
@@ -1085,7 +1236,7 @@ async function main() {
 		})
 		// STAGE 2: determine the scope of each variable
 		function chk() {
-			estraverse.replace(ast, {
+			traverse(ast, {
 				enter(node, parent) {
 					blockEnter(node, parent)
 					if (node.type === "UpdateExpression" && parent.type !== "ExpressionStatement" && parent.type !== "AssignmentExpression") {
@@ -1148,7 +1299,7 @@ async function main() {
 				let unsafe = false
 				for (const a of vars[i].decs) {
 					if (a.type === "Identifier" || a.type === "Literal" || a.type.endsWith("FunctionExpression")) break
-					estraverse.replace(a, {
+					traverse(a, {
 						enter(node) {
 							if (node.type === "NewExpression") {
 								unsafe = true
@@ -1181,7 +1332,7 @@ async function main() {
 			for (const i of Object.keys(vars)) {
 				if (unusedVars.includes(i) || unsafeUnusedVars.includes(i)) delete vars[i]
 			}
-			estraverse.replace(ast, {
+			traverse(ast, {
 				enter(node, parent) {
 					if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression") {
 						if (unusedVars.includes(node.expression.left.name)) {
@@ -1199,7 +1350,7 @@ async function main() {
 		log("Total vars: " + vl)
 		log("Unused vars: " + unusedVars.length)
 		const vm = []
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				blockEnter(node, parent)
 				if (node.type !== "Identifier") return
@@ -1225,7 +1376,7 @@ async function main() {
 		// STAGE 4: put all variable declarations where they belong
 		const reps = {}
 		const initialCharCode = "i".charCodeAt(0)
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				blockEnter(node, parent)
 				if (node.type === "Identifier" && parent.type === "ForInStatement" && parent.left === node) {
@@ -1324,7 +1475,7 @@ async function main() {
 		log('Replacing "abc" with "element" in "let abc = document.getElementById("element")"') // 80 characters damn, i barely managed to make it fit
 		const r = {}
 		const l = []
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (node.type !== "VariableDeclarator" || !node.init) return
 				if (!(node.init.type === "CallExpression" && node.init.callee.type === "MemberExpression")) return
@@ -1346,7 +1497,7 @@ async function main() {
 		const usedArgs = []
 		const unusedArgs = []
 		const funcs = []
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (node.type === "FunctionDeclaration" || node.type.endsWith("FunctionExpression")) {
 					if (node.type === "ArrowFunctionExpression") afd++
@@ -1387,7 +1538,7 @@ async function main() {
 	function removeCyclicDeclarations(){
 		log('removing "abc = abc;"')
 		const r = {}
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (node.type === "ExpressionStatement" && node.expression.type === "AssignmentExpression" && node.expression.left.type === "Identifier" &&
 					node.expression.right.type === "Identifier" && node.expression.left.name === node.expression.right.name) {
@@ -1452,7 +1603,7 @@ async function main() {
 	function removeEmptyFunctions() {
 		log("Removing functions that do nothing")
 		const repl = {}
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node) {
 				if (node.type === 'CallExpression') {
 					const callee = node.callee;
@@ -1555,7 +1706,7 @@ async function main() {
 			else if (node.type === "AssignmentPattern") node = node.left
 			return node.name
 		}
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (
 					node.type === "FunctionDeclaration" ||
@@ -1595,7 +1746,7 @@ async function main() {
 		replaceVars(ast, replacements)
 		log("Removing duplicate constants")
 		const repl = {}
-		estraverse.replace(ast, {
+		traverse(ast, {
 			enter(node, parent) {
 				if (node.type !== "VariableDeclaration") return
 				if (parent.type.startsWith("For") || node.kind !== "const") return

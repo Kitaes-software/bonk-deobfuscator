@@ -10,8 +10,6 @@
   "license": "",
   "dependencies": {
     "astring": "^1.9.0",
-    "estraverse": "^5.3.0",
-    "ini": "^5.0.0",
     "meriyah": "^7.4.0",
     "oxc-minify": "^0.159.0"
   }
