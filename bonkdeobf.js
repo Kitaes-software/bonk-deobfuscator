@@ -1,9 +1,8 @@
-const js_beautify = require('js-beautify/js').js
 const fs = require("fs")
-const minify = require("uglify-js").minify
-const esprima = require("esprima")
-const escodegen = require("escodegen")
+const minify = require("oxc-minify").minifySync
 const estraverse = require("estraverse")
+const meriyah = require("meriyah")
+const astring = require("astring")
 const ini = require("ini")
 const inputPath = "alpha2s.js"
 const sourceUrl = "https://bonk.io/js/alpha2s.js"
@@ -37,8 +36,11 @@ async function init(useFetch = false) {
 	log("Bonk version: " + version)
 	return response;
 }
+function toAst(src) {
+	return meriyah.parseScript(src)
+}
 function fromAst(ast) {
-	return escodegen.generate(ast, { format: { indent: { style: "\t" } } })
+	return astring.generate(ast, {indent: "\t"})
 }
 function log(text) {
 	process.stdout.write(`\n${text}`)
@@ -154,10 +156,6 @@ function setVarNames(ast, thisOnly = false) {
 }
 function finalCleanup(code) {
 	log("Final cleanup")
-	if (r) {
-		code = (minify(code, { compress: false, mangle: false })).code
-	}
-	code = js_beautify(code, { indent_with_tabs: true })
 	if (code.slice(0, 9) === "requirejs") return code.replaceAll("\n\t", "\n")
 }
 function validateCode(code) {
@@ -180,7 +178,7 @@ function saveCode(filename, code) {
 }
 function minifyCode(code) {
 	log("Minifying")
-	const returncode = (minify(code, { mangle: { toplevel: true } })).code
+	const returncode = (minify("a.js", code, { mangle: { toplevel: true } })).code
 	const filename = "deobfuscated/alpha2s.min.js"
 	log("Saving minified code to " + filename)
 	writeToFile(filename, returncode)
@@ -188,7 +186,7 @@ function minifyCode(code) {
 async function main() {
 	const response = await init(options.fetch)
 	if (options.namesOnly) {
-		const ast = esprima.parseScript(response)
+		const ast = toAst(response)
 		setVarNames(ast)
 		let code = finalCleanup(setVarNames(fromAst(ast), true))
 		const filename = "deobfuscated/alpha2s.js"
@@ -199,7 +197,7 @@ async function main() {
 	log("Deobfuscation started")
 	const deobStartTime = Date.now()
 	let returncode = response
-	let ast = esprima.parseScript(returncode)
+	let ast = toAst(returncode)
 	log("Code parsed")
 	function escapeRegExp(string) {
 		return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -327,7 +325,7 @@ async function main() {
 			}
 		}
 		filteredObfCode = { type: "Program", body: filteredObfCode }
-		const obfCode = escodegen.generate(filteredObfCode)
+		const obfCode = fromAst(filteredObfCode)
 		const mainFunctionNames = [MAINFUNCTION]
 		const mainArrayNames = [MAINARRAY]
 		let MAINFUNCTIONEVAL, MAINARRAYEVAL
@@ -510,8 +508,7 @@ async function main() {
 								if (result >= 0) {
 									return {
 										type: "Literal",
-										value: result,
-										raw: String(result)
+										value: result
 									}
 								} else {
 									return {
@@ -520,8 +517,7 @@ async function main() {
 										prefix: true,
 										argument: {
 											type: "Literal",
-											value: Math.abs(result),
-											raw: String(Math.abs(result))
+											value: Math.abs(result)
 										}
 									}
 								}
@@ -613,7 +609,8 @@ async function main() {
 			}
 			return {
 				type: "Literal",
-				value: res
+				value: res,
+				raw: typeof res === "string" ? JSON.stringify(res) : String(res)
 			}
 		}
 		estraverse.replace(ast, {
@@ -1606,7 +1603,7 @@ async function main() {
 					if (element.init?.type === "Literal") {
 						if (element.id.name.length === 1) return
 						this.remove()
-						repl[element.id.name] = element.init.raw
+						repl[element.id.name] = element.init.raw ?? String(element.init.value)
 					}
 				}
 				if (node.declarations.length === 0) this.remove()
